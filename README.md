@@ -31,10 +31,18 @@ By default, the action uses the latest published StackRadar CLI release and stri
 
 ## Release Integrity
 
-Action releases are source releases. Every `vMAJOR.MINOR.PATCH` tag must point
-to a commit on `main` with a successful `ci.yml` run for that exact commit. The
-release workflow verifies both conditions before creating the GitHub Release
-and moving the floating major tag, such as `v1`.
+Action releases are source releases. After a push to `main`, the draft release
+workflow waits for CI to pass for the same commit, then creates or updates the
+next draft release with Release Drafter. Pull request labels resolve the version
+bump:
+`semver:major`, `semver:minor`, `semver:patch`, or `semver:chore`.
+`semver:chore` resolves to a patch release. CI requires exactly one of these
+labels on every pull request.
+
+When a draft release is published, the release workflow verifies that the
+published `vMAJOR.MINOR.PATCH` tag points to a commit on `main` with a
+successful `ci.yml` run for that exact commit. It then moves the floating major
+tag, such as `v1`, to the same commit.
 
 Use `stackradar/stackradar-action@v1` when you want compatible security fixes
 automatically. Pin a full commit SHA when maximum workflow reproducibility is

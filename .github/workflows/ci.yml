@@ -2,6 +2,12 @@ name: CI
 
 on:
   pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
   push:
     branches:
       - main
@@ -11,6 +17,26 @@ permissions:
   actions: read
 
 jobs:
+  semver-label:
+    name: Semver Label
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Require exactly one semver label
+        uses: mheap/github-action-required-labels@23e10fde7e062233401931a0eece796cd9bf3177 # v5.6.0
+        with:
+          mode: exactly
+          count: 1
+          labels: |
+            semver:major
+            semver:minor
+            semver:patch
+            semver:chore
+          message: "Pull requests must have exactly one release label: {{ provided }}. Found: {{ applied }}."
+
   test:
     runs-on: ubuntu-24.04
     steps:
@@ -19,10 +45,10 @@ jobs:
           persist-credentials: false
 
       - name: Shell syntax
-        run: bash -n src/*.sh tests/*.sh
+        run: bash -n src/*.sh tests/*.sh scripts/*.sh
 
       - name: ShellCheck
-        run: shellcheck src/*.sh tests/*.sh
+        run: shellcheck -x src/*.sh tests/*.sh scripts/*.sh
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0

@@ -1,0 +1,32 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+categories:
+  - title: "Breaking Changes"
+    semver-increment: major
+    exclusive: true
+    when:
+      label: "semver:major"
+  - title: "Features"
+    semver-increment: minor
+    exclusive: true
+    when:
+      label: "semver:minor"
+  - title: "Fixes"
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: "semver:patch"
+  - title: "Maintenance"
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: "semver:chore"
+  - title: "Changes"
+    semver-increment: patch
+
+change-template: "- $TITLE (#$NUMBER)"
+change-title-escapes: '\<*_&`'
+
+template: |
+  $CHANGES
