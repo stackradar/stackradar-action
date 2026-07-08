@@ -1,0 +1,125 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "dependencyDashboard": false,
+  "timezone": "Europe/Riga",
+  "labels": [
+    "dependencies"
+  ],
+  "packageRules": [
+    {
+      "description": "Group GitHub Actions updates, including digest refreshes.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Group action support tooling updates extracted by regex managers.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "groupName": "action support tooling"
+    },
+    {
+      "description": "Refresh pinned slsa-verifier checksums after version updates.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchPackageNames": [
+        "slsa-framework/slsa-verifier"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "bash scripts/update-slsa-verifier-checksums.sh"
+        ],
+        "fileFilters": [
+          "src/install-slsa-verifier.sh"
+        ],
+        "executionMode": "branch"
+      }
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update cosign versions installed by sigstore/cosign-installer.",
+      "managerFilePatterns": [
+        "/^action\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "cosign-release:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "sigstore/cosign",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the pinned slsa-verifier binary version.",
+      "managerFilePatterns": [
+        "/^src/install-slsa-verifier\\.sh$/"
+      ],
+      "matchStrings": [
+        "version=\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "slsa-framework/slsa-verifier",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the CLI release exercised by integration tests.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "cli-version:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "stackradar/stackradar-cli",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update pinned Go patch versions used by workflows.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "go-version:\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update actionlint versions run through go run.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "go run github\\.com/rhysd/actionlint/cmd/actionlint@(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "rhysd/actionlint",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the pinned Renovate runner image tag and digest.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "renovate-image:\\s*\"(?<depName>ghcr\\.io/renovatebot/renovate)\"\\s*\\n\\s+renovate-version:\\s*\"(?<currentValue>[^@\\\"]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    }
+  ]
+}

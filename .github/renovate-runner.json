@@ -1,0 +1,9 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "platform": "github",
+  "onboarding": false,
+  "requireConfig": "required",
+  "allowedCommands": [
+    "^bash scripts/update-slsa-verifier-checksums\\.sh$"
+  ]
+}

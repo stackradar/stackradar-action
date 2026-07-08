@@ -1,0 +1,45 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RENOVATE_REPOSITORIES: ${{ github.repository }}
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-24.04
+    if: github.repository == 'stackradar/stackradar-action'
+    steps:
+      - name: Get token
+        id: get_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Renovate's action builds this as <image>:<version>, so keep the
+      # version in tag@digest form and let Renovate update both together.
+      - name: Self-hosted Renovate
+        uses: renovatebot/github-action@b50d2ba2bd928235abdcc14d06dfafc217f1c565 # v46.1.18
+        with:
+          configurationFile: .github/renovate-runner.json
+          token: ${{ steps.get_token.outputs.token }}
+          renovate-image: "ghcr.io/renovatebot/renovate"
+          renovate-version: "43@sha256:f35c9b716f172d873ddaa2f1537f143309dfd23d9d79843c449173258385d27b"
+        env:
+          LOG_LEVEL: info

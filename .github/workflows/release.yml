@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  release-preflight:
+    name: Release Preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tag-commit: ${{ steps.tag.outputs.commit }}
+      major-tag: ${{ steps.tag.outputs.major }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release tag
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must be stable semver tags like v1.2.3."
+            exit 1
+          fi
+
+          tag_commit="$(git rev-list -n 1 "${TAG}^{commit}")"
+          major="${TAG%%.*}"
+
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag commit is on main
+        env:
+          TAG: ${{ github.ref_name }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "::error::Tag $TAG points to $TAG_COMMIT, which is not reachable from origin/main."
+            exit 1
+          fi
+
+      - name: Check CI passed for tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+
+          ci_run_url="$(
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "ci.yml" \
+              --commit "$TAG_COMMIT" \
+              --json conclusion,headSha,status,url \
+              --limit 20 \
+              | jq --raw-output --arg sha "$TAG_COMMIT" 'map(select(.headSha == $sha and .status == "completed" and .conclusion == "success")) | .[0].url // empty'
+          )"
+
+          if [[ -z "$ci_run_url" ]]; then
+            echo "::error::No successful ci.yml run was found for tag commit ${TAG_COMMIT}. Wait for CI on main to pass, then tag the same commit."
+            exit 1
+          fi
+
+          echo "Found successful CI run for ${TAG_COMMIT}: ${ci_run_url}"
+
+  publish:
+    name: Publish Release
+    needs:
+      - release-preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes
+
+      - name: Move major tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAJOR_TAG: ${{ needs.release-preflight.outputs.major-tag }}
+          TAG_COMMIT: ${{ needs.release-preflight.outputs.tag-commit }}
+        run: |
+          set -euo pipefail
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${MAJOR_TAG}" --silent >/dev/null 2>&1; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/${MAJOR_TAG}" \
+              --field sha="$TAG_COMMIT" \
+              --field force=true >/dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              --field ref="refs/tags/${MAJOR_TAG}" \
+              --field sha="$TAG_COMMIT" >/dev/null
+          fi
+
+          echo "Moved ${MAJOR_TAG} to ${TAG_COMMIT}."

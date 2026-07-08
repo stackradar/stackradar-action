@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Shell syntax
+        run: bash -n src/*.sh tests/*.sh
+
+      - name: ShellCheck
+        run: shellcheck src/*.sh tests/*.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26.4"
+          cache: false
+
+      - name: Actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Zizmor
+        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+        with:
+          advanced-security: false
+
+      - name: Action tests
+        run: bash tests/run-tests.sh
+
+  integration:
+    name: Integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Create dependency fixture
+        shell: bash
+        run: |
+          printf '{"name":"stackradar-action-fixture"}\n' > package.json
+          printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
+
+      - name: Run local action
+        uses: ./
+        with:
+          cli-version: v0.1.0
+          mode: bundle-and-upload
+          dry-run: "true"
+          verify: strict

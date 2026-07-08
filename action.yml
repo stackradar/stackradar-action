@@ -1,0 +1,156 @@
+name: StackRadar
+description: Upload dependency evidence to StackRadar from GitHub Actions
+author: StackRadar
+
+branding:
+  color: blue
+  icon: upload-cloud
+
+inputs:
+  cli-version:
+    description: StackRadar CLI version to download. Use latest or a tag such as v0.1.0.
+    required: false
+    default: latest
+  mode:
+    description: Operation to run. Supported values are bundle-and-upload, bundle, and upload.
+    required: false
+    default: bundle-and-upload
+  path:
+    description: Repository path to scan when bundling.
+    required: false
+    default: "."
+  api-url:
+    description: StackRadar app/API base URL.
+    required: false
+    default: https://stackradar.com
+  oidc-audience:
+    description: GitHub Actions OIDC audience expected by StackRadar.
+    required: false
+    default: stackradar.com
+  token:
+    description: Upload token override. Prefer GitHub OIDC for GitHub Actions.
+    required: false
+  bundle-path:
+    description: Bundle output path for bundle modes, or existing bundle path for upload mode.
+    required: false
+  dry-run:
+    description: Call stackradar upload --dry-run instead of uploading.
+    required: false
+    default: "false"
+  fail-on-error:
+    description: Fail the workflow on bundle or upload errors.
+    required: false
+    default: "true"
+  verify:
+    description: CLI verification mode. Supported values are strict, checksum, and false.
+    required: false
+    default: strict
+  exclude:
+    description: Newline-separated glob patterns to exclude from CLI discovery.
+    required: false
+
+outputs:
+  cli-version:
+    description: Resolved StackRadar CLI version.
+    value: ${{ steps.install.outputs.cli-version }}
+  cli-path:
+    description: Installed StackRadar CLI path.
+    value: ${{ steps.install.outputs.cli-path }}
+  bundle-path:
+    description: Created or uploaded bundle path.
+    value: ${{ steps.run.outputs.bundle-path }}
+  bundle-sha256:
+    description: SHA-256 digest of the bundle.
+    value: ${{ steps.run.outputs.bundle-sha256 }}
+  upload-id:
+    description: StackRadar upload/run ID, when uploaded.
+    value: ${{ steps.run.outputs.upload-id }}
+  artifact-id:
+    description: StackRadar upload artifact ID, when uploaded.
+    value: ${{ steps.run.outputs.artifact-id }}
+  status:
+    description: Final action status.
+    value: ${{ steps.run.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_VERIFY: ${{ inputs.verify }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_BUNDLE_PATH: ${{ inputs.bundle-path }}
+      run: |
+        action_path="$GITHUB_ACTION_PATH"
+        if command -v cygpath >/dev/null 2>&1; then
+          action_path="$(cygpath -u "$action_path")"
+        fi
+        bash "$action_path/src/validate-inputs.sh"
+
+    - name: Install cosign
+      if: ${{ inputs.verify != 'false' }}
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      with:
+        cosign-release: v3.1.1
+
+    - name: Install SLSA verifier
+      if: ${{ inputs.verify == 'strict' }}
+      shell: bash
+      run: |
+        action_path="$GITHUB_ACTION_PATH"
+        if command -v cygpath >/dev/null 2>&1; then
+          action_path="$(cygpath -u "$action_path")"
+        fi
+        bash "$action_path/src/install-slsa-verifier.sh"
+
+    - name: Download, verify, and install CLI
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        INPUT_CLI_VERSION: ${{ inputs.cli-version }}
+        INPUT_VERIFY: ${{ inputs.verify }}
+      run: |
+        action_path="$GITHUB_ACTION_PATH"
+        if command -v cygpath >/dev/null 2>&1; then
+          action_path="$(cygpath -u "$action_path")"
+        fi
+        bash "$action_path/src/install-cli.sh"
+
+    - name: Request GitHub OIDC token
+      id: oidc
+      if: ${{ inputs.mode != 'bundle' && inputs.dry-run != 'true' && inputs.token == '' }}
+      shell: bash
+      env:
+        INPUT_OIDC_AUDIENCE: ${{ inputs.oidc-audience }}
+      run: |
+        action_path="$GITHUB_ACTION_PATH"
+        if command -v cygpath >/dev/null 2>&1; then
+          action_path="$(cygpath -u "$action_path")"
+        fi
+        bash "$action_path/src/request-oidc-token.sh"
+
+    - name: Bundle and/or upload
+      id: run
+      shell: bash
+      env:
+        STACKRADAR_CLI_PATH: ${{ steps.install.outputs.cli-path }}
+        STACKRADAR_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_BUNDLE_PATH: ${{ inputs.bundle-path }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+      run: |
+        action_path="$GITHUB_ACTION_PATH"
+        if command -v cygpath >/dev/null 2>&1; then
+          action_path="$(cygpath -u "$action_path")"
+        fi
+        bash "$action_path/src/run-stackradar.sh"
