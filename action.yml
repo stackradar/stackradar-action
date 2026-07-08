@@ -3,7 +3,7 @@ description: Upload dependency evidence to StackRadar from GitHub Actions
 author: StackRadar
 
 branding:
-  color: blue
+  color: black
   icon: upload-cloud
 
 inputs:
