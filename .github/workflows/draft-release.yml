@@ -1,0 +1,81 @@
+name: Draft Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: draft-release
+  cancel-in-progress: false
+
+jobs:
+  draft-release:
+    name: Draft Release
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Wait for CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          deadline=$((SECONDS + 900))
+          ci_url=""
+
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            runs="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "ci.yml" \
+                --commit "$TARGET_SHA" \
+                --json conclusion,headSha,status,url \
+                --limit 20
+            )"
+
+            ci_url="$(
+              jq --raw-output --arg sha "$TARGET_SHA" \
+                'map(select(.headSha == $sha)) | .[0].url // empty' <<<"$runs"
+            )"
+            ci_status="$(
+              jq --raw-output --arg sha "$TARGET_SHA" \
+                'map(select(.headSha == $sha)) | .[0].status // empty' <<<"$runs"
+            )"
+            ci_conclusion="$(
+              jq --raw-output --arg sha "$TARGET_SHA" \
+                'map(select(.headSha == $sha)) | .[0].conclusion // empty' <<<"$runs"
+            )"
+
+            if [ "$ci_status" = "completed" ] && [ "$ci_conclusion" = "success" ]; then
+              echo "Found successful CI run for ${TARGET_SHA}: ${ci_url}"
+              exit 0
+            fi
+
+            if [ "$ci_status" = "completed" ] && [ "$ci_conclusion" != "success" ]; then
+              echo "::error::CI completed with conclusion ${ci_conclusion} for ${TARGET_SHA}: ${ci_url}"
+              exit 1
+            fi
+
+            echo "Waiting for CI to pass for ${TARGET_SHA}..."
+            sleep 15
+          done
+
+          echo "::error::Timed out waiting for CI to pass for ${TARGET_SHA}."
+          exit 1
+
+      - name: Create or update draft release
+        uses: release-drafter/release-drafter@4d75298e00d9e34c483e5ff8c68d0ea1c1940c1e # v7.5.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          commitish: ${{ github.sha }}
+          config-name: release-drafter.yml
