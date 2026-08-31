@@ -53,14 +53,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.27.0"
           cache: false
 
       - name: Actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
       - name: Zizmor
-        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
         with:
           advanced-security: false
 
