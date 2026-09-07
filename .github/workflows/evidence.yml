@@ -1,0 +1,53 @@
+name: StackRadar dependency evidence
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  evidence:
+    if: >-
+      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.id == github.event.repository.id &&
+       github.event.pull_request.base.ref == github.event.repository.default_branch &&
+       github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the actual evidence commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Collect and upload dependency files
+        uses: stackradar/stackradar-action@ab245ae127e9d4670972b4ae0d4f833e9e1b00c3
+        with:
+          trusted-evidence: "true"
+
+  unsupported:
+    if: >-
+      !((github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.head.repo.id == github.event.repository.id &&
+         github.event.pull_request.base.ref == github.event.repository.default_branch &&
+         github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]'))
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Explain why evidence is not uploaded
+        shell: bash
+        run: |
+          printf '%s\n' \
+            '### StackRadar evidence skipped' \
+            'Only default-branch pushes and same-repository PRs targeting the default branch are supported.' \
+            'Fork and Dependabot PRs cannot obtain the required OIDC token. No StackRadar app check is created.' \
+            'Do not treat this Actions job as the StackRadar app check required by branch protection.' \
+            >> "$GITHUB_STEP_SUMMARY"

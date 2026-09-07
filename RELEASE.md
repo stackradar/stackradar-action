@@ -42,6 +42,44 @@ tag, such as `v1`, to the same commit. Consumers who want security fixes
 automatically can use `stackradar/stackradar-action@v1`. Consumers who want
 maximum reproducibility can pin a full commit SHA.
 
+## Trusted evidence workflow rollout and rotation
+
+The reusable workflow at `.github/workflows/evidence.yml` is the complete trusted
+job. It accepts no inputs and pins this composite action to an immutable commit.
+Use a full 40-character workflow commit SHA in customer callers, never a branch
+or floating tag. The normal composite-action push-only workflow remains supported.
+
+Roll out in this order:
+
+1. Merge and release the CLI supporting `--pull-request-context`, `--allow-empty`,
+   and `--ignore-gitignore` through its existing verified release pipeline.
+2. Merge this action and reusable workflow, verify CI, and record the final
+   reusable-workflow commit SHA. Keep the internal composite-action pin immutable.
+3. Configure the limited GitHub App with **Metadata: read** and **Checks: write**
+   only. Do not grant Contents, Pull requests, or Issues. Existing installations
+   must approve the permission update in their GitHub installation settings.
+4. Deploy the app's additive migration and PR upload processing, then set
+   `EVIDENCE_UPLOADS_WORKFLOW_RELEASES` to a JSON SHA-to-retirement mapping. The
+   recommended release has a `null` deadline. An empty map disables PR uploads.
+5. Confirm a default-branch upload, PR-head evidence isolation, and check publishing
+   on a test installation before asking customers to replace their workflow stub.
+
+For rotations, publish the old SHA's retirement date in release notes at least
+30 days in advance. Add the new SHA with a `null` deadline and keep the previous
+SHA with that ISO-8601 retirement timestamp. The app accepts it until the deadline
+and prompts installations with older observed pins to upgrade. Retain retired
+entries so the UI can explain the deadline. Do not silently repoint a pinned ref.
+
+Example configuration (substitute actual tested workflow commits):
+`{"<new-40-character-sha>":null,"<previous-40-character-sha>":"2026-12-01T00:00:00Z"}`.
+
+No `check_suite` subscription is needed: checks are created from authenticated
+uploads. A deleted/broken workflow produces no app check. Require **StackRadar**
+in branch protection and select the **StackRadar Limited Access app** as the
+expected source; requiring an identically named Actions job is not sufficient.
+Fork and Dependabot PRs get an Actions summary, not a synthetic passing app check.
+
+
 ## Failed Releases
 
 If the release workflow fails, do not manually move the major tag or publish a

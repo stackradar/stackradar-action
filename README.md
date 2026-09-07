@@ -5,7 +5,49 @@ Upload deterministic dependency-evidence bundles to StackRadar from GitHub Actio
 The action is intentionally thin: it downloads a released `stackradar` CLI binary, verifies it, requests a GitHub Actions OIDC token when uploading, then calls the CLI.
 CLI binaries are downloaded from [`stackradar/stackradar-cli`](https://github.com/stackradar/stackradar-cli) releases.
 
-## Default Workflow
+## Pull Request Checks
+
+Copy the pinned reusable-workflow snippet from the limited-access integration
+settings in StackRadar. Use the repository's detected default branch for pushes:
+
+```yaml
+name: StackRadar
+on:
+  push:
+    branches: ['main']
+  pull_request:
+
+jobs:
+  stackradar:
+    permissions:
+      contents: read
+      id-token: write
+    uses: stackradar/stackradar-action/.github/workflows/evidence.yml@<40-character-sha-from-StackRadar>
+```
+
+The reusable workflow owns the whole job and accepts no inputs. It checks out
+the actual PR head, derives PR and baseline-history context, and uploads the
+same manifests and lockfiles through this pinned action. It does not run package
+scripts, install repository dependencies, or upload application source files.
+The GitHub App needs only **Metadata: read** and **Checks: write**.
+
+Run a default-branch upload first. Checks compare with the latest successful
+default-branch upload; missing or older-than-branch-point snapshots produce an
+inconclusive result. Private-repository checks retain StackRadar's plan gate.
+Fork and Dependabot PRs, and PRs targeting another branch, are skipped visibly
+in Actions and receive no app check.
+
+Require the **StackRadar** check in branch protection, with the **StackRadar
+Limited Access app** as the expected source. A removed or broken workflow yields
+no check, not a pass. An Actions job with the same name is not the app check.
+Existing installations must approve the new Checks permission in GitHub.
+
+Only server-allowlisted immutable workflow pins can upload PR evidence. See
+[RELEASE.md](RELEASE.md#trusted-evidence-workflow-rollout-and-rotation) for the
+CLI prerequisite and the minimum 30-day published retirement window. Existing
+push-only workflows keep working for inventory during upgrades.
+
+## Existing Push-Only Workflow
 
 ```yaml
 name: StackRadar
@@ -127,6 +169,7 @@ jobs:
 | Input | Default | Description |
 | --- | --- | --- |
 | `cli-version` | `latest` | CLI release to download. Use `latest` or a tag such as `v0.1.0`. |
+| `trusted-evidence` | `false` | Used by the trusted reusable workflow for complete discovery and PR context. Setting this on a caller-defined composite job does not satisfy server trust. |
 | `mode` | `bundle-and-upload` | `bundle-and-upload`, `bundle`, or `upload`. |
 | `path` | `.` | Repository path to scan when bundling. |
 | `api-url` | `https://stackradar.com` | StackRadar app/API base URL. |
