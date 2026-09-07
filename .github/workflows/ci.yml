@@ -71,6 +71,9 @@ jobs:
       - name: Action tests
         run: bash tests/run-tests.sh
 
+      - name: Trusted evidence context tests
+        run: node --test tests/*.test.mjs
+
   integration:
     name: Integration (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

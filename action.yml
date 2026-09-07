@@ -7,6 +7,10 @@ branding:
   icon: upload-cloud
 
 inputs:
+  trusted-evidence:
+    description: Collect complete evidence and derive PR context for the trusted reusable workflow. Server-side OIDC validation is still required.
+    required: false
+    default: "false"
   cli-version:
     description: StackRadar CLI version to download. Use latest or a tag such as v0.1.0.
     required: false
@@ -121,6 +125,12 @@ runs:
         fi
         bash "$action_path/src/install-cli.sh"
 
+    - name: Derive trusted PR context
+      id: context
+      if: ${{ inputs.trusted-evidence == 'true' }}
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/pull-request-context.mjs"
+
     - name: Request GitHub OIDC token
       id: oidc
       if: ${{ inputs.mode != 'bundle' && inputs.dry-run != 'true' && inputs.token == '' }}
@@ -148,6 +158,8 @@ runs:
         INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
         INPUT_TOKEN: ${{ inputs.token }}
         INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_TRUSTED_EVIDENCE: ${{ inputs.trusted-evidence }}
+        INPUT_PULL_REQUEST_CONTEXT: ${{ steps.context.outputs.path }}
       run: |
         action_path="$GITHUB_ACTION_PATH"
         if command -v cygpath >/dev/null 2>&1; then

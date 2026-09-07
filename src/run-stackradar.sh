@@ -15,6 +15,8 @@ fail_on_error="${INPUT_FAIL_ON_ERROR:-true}"
 token_override="${INPUT_TOKEN:-}"
 oidc_token="${STACKRADAR_OIDC_TOKEN:-}"
 exclude_patterns="${INPUT_EXCLUDE:-}"
+trusted_evidence="${INPUT_TRUSTED_EVIDENCE:-false}"
+pull_request_context="${INPUT_PULL_REQUEST_CONTEXT:-}"
 
 unset INPUT_TOKEN
 unset STACKRADAR_OIDC_TOKEN
@@ -45,6 +47,10 @@ run_bundle() {
   local args=("$cli_path" bundle --path "$scan_path" --output "$bundle_path")
   local pattern
 
+  if [ "$trusted_evidence" = "true" ]; then
+    args+=(--allow-empty --ignore-gitignore)
+  fi
+
   while IFS= read -r pattern; do
     if [ -n "$pattern" ]; then
       args+=(--exclude "$pattern")
@@ -62,6 +68,10 @@ run_bundle() {
 run_upload() {
   local args=("$cli_path" upload "$bundle_path" --api-url "$api_url")
   local token=""
+
+  if [ -n "$pull_request_context" ]; then
+    args+=(--pull-request-context "$pull_request_context")
+  fi
 
   if [ "$dry_run" = "true" ]; then
     args+=(--dry-run)
