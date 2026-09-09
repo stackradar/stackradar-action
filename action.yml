@@ -8,7 +8,7 @@ branding:
 
 inputs:
   trusted-evidence:
-    description: Collect complete evidence and derive PR context for the trusted reusable workflow. Server-side OIDC validation is still required.
+    description: Collect committed dependency evidence and derive PR context for the trusted reusable workflow. Server-side OIDC validation is still required.
     required: false
     default: "false"
   cli-version:
@@ -160,6 +160,7 @@ runs:
         INPUT_EXCLUDE: ${{ inputs.exclude }}
         INPUT_TRUSTED_EVIDENCE: ${{ inputs.trusted-evidence }}
         INPUT_PULL_REQUEST_CONTEXT: ${{ steps.context.outputs.path }}
+        INPUT_EVIDENCE_COMMIT: ${{ steps.context.outputs.commit }}
       run: |
         action_path="$GITHUB_ACTION_PATH"
         if command -v cygpath >/dev/null 2>&1; then

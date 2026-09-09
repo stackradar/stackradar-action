@@ -393,7 +393,7 @@ test_install_rejects_ambient_trust_overrides() {
   ok "install rejects ambient trust overrides"
 }
 
-test_run_trusted_evidence_passes_context_and_complete_discovery_flags() {
+test_run_trusted_evidence_passes_context_and_commit() {
   reset_tmp
   write_fake_cli
   FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
@@ -402,14 +402,15 @@ test_run_trusted_evidence_passes_context_and_complete_discovery_flags() {
     INPUT_MODE="bundle-and-upload" \
     INPUT_BUNDLE_PATH="$TMP_ROOT/work/stackradar.zip" \
     INPUT_TRUSTED_EVIDENCE="true" \
+    INPUT_EVIDENCE_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
     INPUT_PULL_REQUEST_CONTEXT="$TMP_ROOT/context.json" \
     run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
-  grep -Fq -- '--allow-empty --ignore-gitignore' "$TMP_ROOT/cli.log" || fail "trusted discovery flags missing"
+  grep -Fq -- '--allow-empty --commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$TMP_ROOT/cli.log" || fail "committed discovery flags missing"
   grep -Fq -- "--pull-request-context $TMP_ROOT/context.json" "$TMP_ROOT/cli.log" || fail "PR context missing"
-  ok "trusted evidence passes complete discovery flags and PR context"
+  ok "trusted evidence passes exact commit and PR context"
 }
 
-test_run_trusted_evidence_passes_context_and_complete_discovery_flags
+test_run_trusted_evidence_passes_context_and_commit
 test_validate_rejects_bad_mode
 test_request_oidc_masks_token
 test_run_bundle_mode_does_not_upload

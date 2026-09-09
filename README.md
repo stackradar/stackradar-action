@@ -26,26 +26,31 @@ jobs:
 ```
 
 The reusable workflow owns the whole job and accepts no inputs. It checks out
-the actual PR head, derives PR and baseline-history context, and uploads the
-same manifests and lockfiles through this pinned action. It does not run package
+the actual PR head, derives PR identity and changed/deleted/renamed paths, and uploads the
+same manifests and lockfiles through the action at the same pinned commit (`$/`). It does not run package
 scripts, install repository dependencies, or upload application source files.
-The GitHub App needs only **Metadata: read** and **Checks: write**.
+The GitHub App uses **Metadata: read**, **Checks: write**, and **Issues: write**
+for check runs and ordinary PR comments, without Contents or Pull requests permission.
 
-Run a default-branch upload first. Checks compare with the latest successful
-default-branch upload; missing or older-than-branch-point snapshots produce an
-inconclusive result. Private-repository checks retain StackRadar's plan gate.
+Default-branch uploads maintain current inventory. PR checks compare affected
+sources with that stored inventory, recording its snapshot and observed commit;
+no new main-branch fetch or ancestry window is required. Missing baselines (except
+newly added sources), collection errors, and lost lockfile coverage are inconclusive.
+The stored inventory can lag behind the target branch, as with full access. Private-repository checks retain StackRadar's plan gate.
 Fork and Dependabot PRs, and PRs targeting another branch, are skipped visibly
 in Actions and receive no app check.
 
 Require the **StackRadar** check in branch protection, with the **StackRadar
 Limited Access app** as the expected source. A removed or broken workflow yields
 no check, not a pass. An Actions job with the same name is not the app check.
-Existing installations must approve the new Checks permission in GitHub.
+When required, unsupported fork/Dependabot PRs need an authorized branch-protection
+bypass to merge. Existing installations must approve Checks and Issues permissions
+in GitHub. Committed collection includes tracked gitignored files and excludes
+untracked files.
 
-Only server-allowlisted immutable workflow pins can upload PR evidence. See
-[RELEASE.md](RELEASE.md#trusted-evidence-workflow-rollout-and-rotation) for the
-CLI prerequisite and the minimum 30-day published retirement window. Existing
-push-only workflows keep working for inventory during upgrades.
+PR evidence must come from the immutable workflow commit configured in StackRadar.
+See [RELEASE.md](RELEASE.md#trusted-evidence-workflow-setup) for the CLI prerequisite
+and setup. Existing push-only workflows keep working for inventory.
 
 ## Existing Push-Only Workflow
 

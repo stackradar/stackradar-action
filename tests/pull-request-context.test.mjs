@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,11 +15,11 @@ function fixture() {
     env: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REPOSITORY_ID: '123', GITHUB_REF: 'refs/pull/447/merge', GITHUB_ACTOR: 'renovate[bot]' },
   };
 }
-const fakeGit = (args) => args[0] === 'rev-parse' ? head : args[0] === 'merge-base' ? point : base;
+const fakeGit = (args) => args[0] === 'rev-parse' ? head : args[0] === 'merge-base' ? point : '';
 
-test('derives head and verified baseline window without treating merge SHA as head', () => {
+test('derives exact head and changed paths without a baseline ancestry window', () => {
   const { event, env } = fixture();
-  assert.deepEqual(pullRequestContext(event, env, fakeGit), { number: 447, head_sha: head, base_sha: base, head_repository_id: '123', baseline_eligible_shas: [base, point] });
+  assert.deepEqual(pullRequestContext(event, env, fakeGit), { number: 447, head_sha: head, base_sha: base, head_repository_id: '123', changed_files: [] });
 });
 
 test('rejects unsupported origins, targets, event numbers and checkouts', () => {
@@ -46,26 +46,33 @@ test('only default branch pushes produce inventory', () => {
   assert.throws(() => pullRequestContext(event, env, fakeGit));
 });
 
-test('uses real ancestry and excludes snapshots older than the PR branch point', (t) => {
+test('collects real PR changes including deletion and rename, excluding changes only on main', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'stackradar-history-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const git = (args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const git = (args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   git(['init', '-b', 'trunk']); git(['config', 'user.name', 'Tests']); git(['config', 'user.email', 'tests@stackradar.com']);
-  git(['commit', '--allow-empty', '-m', 'old']); const old = git(['rev-parse', 'HEAD']);
-  git(['commit', '--allow-empty', '-m', 'branch point']); const branchPoint = git(['rev-parse', 'HEAD']);
-  git(['checkout', '-b', 'feature']); git(['commit', '--allow-empty', '-m', 'head']); const prHead = git(['rev-parse', 'HEAD']);
-  git(['checkout', 'trunk']); git(['commit', '--allow-empty', '-m', 'base']); const prBase = git(['rev-parse', 'HEAD']);
+  writeFileSync(join(directory, 'package-lock.json'), 'lock');
+  writeFileSync(join(directory, 'old requirements.txt'), 'example==1.0');
+  git(['add', '.']); git(['commit', '-m', 'base']);
+  git(['checkout', '-b', 'feature']);
+  unlinkSync(join(directory, 'package-lock.json'));
+  renameSync(join(directory, 'old requirements.txt'), join(directory, 'requirements.txt'));
+  writeFileSync(join(directory, 'package.json'), '{}');
+  git(['add', '.']); git(['commit', '-m', 'PR']); const prHead = git(['rev-parse', 'HEAD']).trim();
+  git(['checkout', 'trunk']); writeFileSync(join(directory, 'composer.json'), '{}');
+  git(['add', '.']); git(['commit', '-m', 'main only']); const prBase = git(['rev-parse', 'HEAD']).trim();
   git(['checkout', '--detach', prHead]);
   const { event, env } = fixture(); event.pull_request.head.sha = prHead; event.pull_request.base.sha = prBase;
-  const context = pullRequestContext(event, env, git);
-  assert.deepEqual(context.baseline_eligible_shas, [prBase, branchPoint]);
-  assert.ok(!context.baseline_eligible_shas.includes(old));
+  assert.deepEqual(pullRequestContext(event, env, git).changed_files, [
+    { path: 'package-lock.json', status: 'removed' },
+    { path: 'package.json', status: 'added' },
+    { path: 'requirements.txt', status: 'renamed', previous_path: 'old requirements.txt' },
+  ]);
 });
 
-test('bounds history and rejects ambiguous branch points', () => {
+test('rejects ambiguous branch points and incomplete changed-file lists', () => {
   const { event, env } = fixture();
-  const commits = Array.from({ length: 1000 }, (_, i) => i.toString(16).padStart(40, '0'));
-  const context = pullRequestContext(event, env, (args) => args[0] === 'rev-list' ? commits.join('\n') : fakeGit(args));
-  assert.equal(context.baseline_eligible_shas.length, 1000);
   assert.throws(() => pullRequestContext(event, env, (args) => args[0] === 'merge-base' ? `${point}\n${base}` : fakeGit(args)));
+  assert.throws(() => pullRequestContext(event, env, (args) => args[0] === 'diff' ? 'R100\0old\0' : fakeGit(args)));
+  assert.throws(() => pullRequestContext(event, env, (args) => args[0] === 'diff' ? 'M\0truncated' : fakeGit(args)));
 });

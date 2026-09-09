@@ -48,7 +48,8 @@ run_bundle() {
   local pattern
 
   if [ "$trusted_evidence" = "true" ]; then
-    args+=(--allow-empty --ignore-gitignore)
+    require_value "INPUT_EVIDENCE_COMMIT" "${INPUT_EVIDENCE_COMMIT:-}"
+    args+=(--allow-empty --commit "$INPUT_EVIDENCE_COMMIT")
   fi
 
   while IFS= read -r pattern; do

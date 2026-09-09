@@ -24,27 +24,39 @@ export function pullRequestContext(event, environment, git) {
     || !shaPattern.test(pr.head?.sha) || !shaPattern.test(pr.base?.sha)) {
     throw new Error('Unsupported or invalid pull request context. Forks and Dependabot PRs cannot upload evidence.');
   }
-  if (git(['rev-parse', 'HEAD']) !== pr.head.sha) {
+  if (git(['rev-parse', 'HEAD']).trim() !== pr.head.sha) {
     throw new Error('Checkout must match the PR head, not the synthetic merge commit.');
   }
 
-  const branchPoints = git(['merge-base', '--all', pr.head.sha, pr.base.sha]).split('\n');
+  const branchPoints = git(['merge-base', '--all', pr.head.sha, pr.base.sha]).trim().split('\n');
   if (branchPoints.length !== 1 || !shaPattern.test(branchPoints[0])) {
-    throw new Error('Cannot establish an unambiguous PR branch point.');
+    throw new Error('Cannot establish an unambiguous PR diff.');
   }
-  const branchPoint = branchPoints[0];
-  const history = git(['rev-list', '--max-count=1000', '--ancestry-path', `${branchPoint}..${pr.base.sha}`]);
-  const eligible = history ? history.split('\n') : [];
-  // If the bounded window is full, older snapshots are intentionally inconclusive.
-  if (eligible.length < 1000) eligible.push(branchPoint);
-  if (!eligible.every((sha) => shaPattern.test(sha))) throw new Error('Invalid Git history.');
+  const changes = git(['diff', '--no-ext-diff', '--name-status', '-z', '--find-renames', branchPoints[0], pr.head.sha, '--']);
+  const fields = changes.split('\0');
+  if (fields.pop() !== '') throw new Error('Incomplete changed-file list.');
+  const changedFiles = [];
+  while (fields.length) {
+    const status = fields.shift();
+    const path = fields.shift();
+    if (!path) throw new Error('Invalid changed-file list.');
+    if (/^R[0-9]+$/.test(status)) {
+      const newPath = fields.shift();
+      if (!newPath) throw new Error('Incomplete rename.');
+      changedFiles.push({ path: newPath, status: 'renamed', previous_path: path });
+    } else {
+      const state = { A: 'added', M: 'modified', D: 'removed', T: 'modified' }[status];
+      if (!state) throw new Error('Unsupported changed-file status.');
+      changedFiles.push({ path, status: state });
+    }
+  }
 
   return {
     number: event.number,
     head_sha: pr.head.sha,
     base_sha: pr.base.sha,
     head_repository_id: repositoryId,
-    baseline_eligible_shas: eligible,
+    changed_files: changedFiles,
   };
 }
 
@@ -55,7 +67,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     encoding: 'utf8',
     env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' },
     maxBuffer: 1024 * 1024,
-  }).trim());
+  }));
+  appendFileSync(process.env.GITHUB_OUTPUT, `commit=${context?.head_sha ?? process.env.GITHUB_SHA}\n`);
   if (context) {
     const directory = mkdtempSync(join(process.env.RUNNER_TEMP, 'stackradar-pr-'));
     const path = join(directory, 'context.json');

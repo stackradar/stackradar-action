@@ -28,7 +28,7 @@ jobs:
           lfs: false
 
       - name: Collect and upload dependency files
-        uses: stackradar/stackradar-action@ab245ae127e9d4670972b4ae0d4f833e9e1b00c3
+        uses: $/
         with:
           trusted-evidence: "true"
 
