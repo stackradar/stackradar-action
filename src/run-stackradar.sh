@@ -137,7 +137,7 @@ run_upload() {
   local args=("$cli_path" upload "$bundle_path" --api-url "$api_url")
   local token=""
 
-  if [ "$github_event_name" = "pull_request" ]; then
+  if [ "$github_event_name" = "pull_request" ] && [ "$dry_run" != "true" ]; then
     args+=(--context-file "$(build_pull_request_context)")
   fi
 
