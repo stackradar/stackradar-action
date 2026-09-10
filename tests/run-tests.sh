@@ -228,6 +228,62 @@ test_run_upload_mode_uses_input_token_without_cli_argument() {
   ok "upload mode uses input token without CLI argument"
 }
 
+test_pull_request_run_attaches_exact_head_context() {
+  reset_tmp
+  write_fake_cli
+
+  cat >"$TMP_ROOT/bin/git" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'M\0package-lock.json\0R100\0package-old.json\0package.json\0'
+SH
+  chmod +x "$TMP_ROOT/bin/git"
+
+  cat >"$TMP_ROOT/bin/unzip" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '{"files":[{"path":"package-lock.json"},{"path":"package.json"}]}'
+SH
+  chmod +x "$TMP_ROOT/bin/unzip"
+
+  cat >"$TMP_ROOT/event.json" <<'JSON'
+{
+  "repository": {"default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "html_url": "https://github.com/acme/radar/pull/42",
+    "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc", "ref": "deps", "repo": {"id": 20002}},
+    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "main"}
+  }
+}
+JSON
+
+  PATH="$TMP_ROOT/bin:$PATH" \
+    FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
+    STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
+    STACKRADAR_OIDC_TOKEN="oidc-token" \
+    GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    INPUT_MODE="bundle-and-upload" \
+    INPUT_PATH="$TMP_ROOT/work" \
+    INPUT_API_URL="https://stackradar.com" \
+    INPUT_BUNDLE_PATH="$TMP_ROOT/work/stackradar.zip" \
+    INPUT_DRY_RUN="false" \
+    INPUT_FAIL_ON_ERROR="true" \
+    INPUT_TOKEN="" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
+
+  grep -Fq -- "bundle --path $TMP_ROOT/work --output $TMP_ROOT/work/stackradar.zip --allow-empty" "$TMP_ROOT/cli.log" || fail "PR bundle did not allow deletion-only evidence"
+  context_path="$(awk '{for (i = 1; i <= NF; i++) if ($i == "--context-file") { print $(i + 1); exit }}' "$TMP_ROOT/cli.log")"
+  test -f "$context_path" || fail "PR upload context file was not created"
+  test "$(jq -r '.purpose' "$context_path")" = "pull_request" || fail "PR upload purpose was not set"
+  test "$(jq -r '.pull_request.head_sha' "$context_path")" = "cccccccccccccccccccccccccccccccccccccccc" || fail "PR head SHA was not bound"
+  test "$(jq -r '.pull_request.changes[1].previous_path' "$context_path")" = "package-old.json" || fail "renamed source path was not collected"
+  test "$(jq -r '.pull_request.collection.expected_paths | length' "$context_path")" = "2" || fail "evidence coverage was not recorded"
+  ok "pull request run attaches exact head and collection context"
+}
+
 test_run_dry_run_calls_cli_upload_dry_run_without_token() {
   reset_tmp
   write_fake_cli
@@ -398,6 +454,7 @@ test_request_oidc_masks_token
 test_run_bundle_mode_does_not_upload
 test_run_upload_mode_uses_oidc_token_and_masks_it
 test_run_upload_mode_uses_input_token_without_cli_argument
+test_pull_request_run_attaches_exact_head_context
 test_run_dry_run_calls_cli_upload_dry_run_without_token
 test_fail_on_error_false_suppresses_upload_failure
 test_fail_on_error_false_suppresses_bundle_failure
