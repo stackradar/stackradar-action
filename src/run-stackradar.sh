@@ -53,16 +53,22 @@ run_bundle() {
     fi
   done <<< "$exclude_patterns"
 
+  if output="$("${args[@]}" 2>&1)"; then
+    printf '%s\n' "$output"
+    return
+  fi
+
   if [ "$github_event_name" = "pull_request" ]; then
-    args+=(--allow-empty)
+    local pull_request_args=("${args[@]}" --allow-empty)
+
+    if output="$("${pull_request_args[@]}" 2>&1)"; then
+      printf '%s\n' "$output"
+      return
+    fi
   fi
 
-  if ! output="$("${args[@]}" 2>&1)"; then
-    printf '%s\n' "$output" >&2
-    handle_failure "bundle-failed" "StackRadar bundle failed. No supported dependency files were found under $scan_path, or discovery failed."
-  fi
-
-  printf '%s\n' "$output"
+  printf '%s\n' "$output" >&2
+  handle_failure "bundle-failed" "StackRadar bundle failed. No supported dependency files were found under $scan_path, or discovery failed."
 }
 
 build_pull_request_context() {

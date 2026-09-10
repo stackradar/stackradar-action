@@ -35,14 +35,22 @@ case "$1" in
     ;;
   bundle)
     output=""
+    allow_empty="0"
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "--output" ]; then
         shift
         output="$1"
       fi
+      if [ "$1" = "--allow-empty" ]; then
+        allow_empty="1"
+      fi
       shift || true
     done
     if [ "${FAKE_BUNDLE_FAIL:-}" = "1" ]; then
+      echo "no supported dependency files found" >&2
+      exit 2
+    fi
+    if [ "${FAKE_BUNDLE_EMPTY:-}" = "1" ] && [ "$allow_empty" != "1" ]; then
       echo "no supported dependency files found" >&2
       exit 2
     fi
@@ -260,6 +268,7 @@ JSON
 
   PATH="$TMP_ROOT/bin:$PATH" \
     FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
+    FAKE_BUNDLE_EMPTY="1" \
     STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
     STACKRADAR_OIDC_TOKEN="oidc-token" \
     GITHUB_EVENT_NAME="pull_request" \
@@ -274,7 +283,8 @@ JSON
     INPUT_EXCLUDE="" \
     run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
 
-  grep -Fq -- "bundle --path $TMP_ROOT/work --output $TMP_ROOT/work/stackradar.zip --allow-empty" "$TMP_ROOT/cli.log" || fail "PR bundle did not allow deletion-only evidence"
+  grep -Fq -- "bundle --path $TMP_ROOT/work --output $TMP_ROOT/work/stackradar.zip" "$TMP_ROOT/cli.log" || fail "PR bundle was not attempted with released CLI arguments"
+  grep -Fq -- "bundle --path $TMP_ROOT/work --output $TMP_ROOT/work/stackradar.zip --allow-empty" "$TMP_ROOT/cli.log" || fail "PR bundle did not retry for deletion-only evidence"
   context_path="$(awk '{for (i = 1; i <= NF; i++) if ($i == "--context-file") { print $(i + 1); exit }}' "$TMP_ROOT/cli.log")"
   test -f "$context_path" || fail "PR upload context file was not created"
   test "$(jq -r '.purpose' "$context_path")" = "pull_request" || fail "PR upload purpose was not set"
