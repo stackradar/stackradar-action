@@ -366,6 +366,61 @@ test_fail_on_error_false_suppresses_bundle_failure() {
   ok "fail-on-error false suppresses bundle failure"
 }
 
+test_fail_on_error_false_suppresses_pull_request_context_failure() {
+  reset_tmp
+  write_fake_cli
+  printf "bundle-bytes" >"$TMP_ROOT/work/stackradar.zip"
+
+  cat >"$TMP_ROOT/bin/git" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+SH
+  chmod +x "$TMP_ROOT/bin/git"
+
+  cat >"$TMP_ROOT/bin/unzip" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 9
+SH
+  chmod +x "$TMP_ROOT/bin/unzip"
+
+  cat >"$TMP_ROOT/event.json" <<'JSON'
+{
+  "repository": {"default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "html_url": "https://github.com/acme/radar/pull/42",
+    "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc", "ref": "deps", "repo": {"id": 20002}},
+    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "main"}
+  }
+}
+JSON
+
+  PATH="$TMP_ROOT/bin:$PATH" \
+    FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
+    STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
+    STACKRADAR_OIDC_TOKEN="oidc-token" \
+    GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    INPUT_MODE="upload" \
+    INPUT_PATH="$TMP_ROOT/work" \
+    INPUT_API_URL="https://stackradar.com" \
+    INPUT_BUNDLE_PATH="$TMP_ROOT/work/stackradar.zip" \
+    INPUT_DRY_RUN="false" \
+    INPUT_FAIL_ON_ERROR="false" \
+    INPUT_TOKEN="" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"
+
+  grep -Fq "::warning::StackRadar could not collect pull request context." "$TMP_ROOT/stderr" || fail "context failure was not downgraded to a warning"
+  assert_output_contains "status=context-failed"
+  if [ -f "$TMP_ROOT/cli.log" ] && grep -Fq "upload" "$TMP_ROOT/cli.log"; then
+    fail "context failure should not continue to upload"
+  fi
+  ok "fail-on-error false suppresses pull request context failure"
+}
+
 test_install_maps_platform_and_outputs_cli_version() {
   reset_tmp
   local archive_name="stackradar_1.2.3_linux_amd64.tar.gz"
@@ -468,6 +523,7 @@ test_pull_request_run_attaches_exact_head_context
 test_run_dry_run_calls_cli_upload_dry_run_without_token
 test_fail_on_error_false_suppresses_upload_failure
 test_fail_on_error_false_suppresses_bundle_failure
+test_fail_on_error_false_suppresses_pull_request_context_failure
 test_install_maps_platform_and_outputs_cli_version
 test_install_rejects_ambient_trust_overrides
 

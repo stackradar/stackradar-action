@@ -112,9 +112,11 @@ build_pull_request_context() {
     errors='["Unable to collect the pull request file change set."]'
   fi
 
-  expected_paths="$(unzip -p "$bundle_path" stackradar-manifest.json | jq -c '[.files[].path]')"
+  if ! expected_paths="$(unzip -p "$bundle_path" stackradar-manifest.json | jq -c '[.files[].path]')"; then
+    die "Unable to read dependency paths from the StackRadar bundle manifest."
+  fi
 
-  jq -n \
+  if ! jq -n \
     --argjson number "$(jq '.pull_request.number' "$github_event_path")" \
     --arg url "$(jq -r '.pull_request.html_url // empty' "$github_event_path")" \
     --arg head_sha "$head_sha" \
@@ -128,7 +130,9 @@ build_pull_request_context() {
     --argjson expected_paths "$expected_paths" \
     --argjson errors "$errors" \
     '{purpose: "pull_request", pull_request: {number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: $changes, collection: {complete: $complete, expected_paths: $expected_paths, errors: $errors}}}' \
-    > "$context_path"
+    > "$context_path"; then
+    die "Unable to write the StackRadar pull request context."
+  fi
 
   printf '%s\n' "$context_path"
 }
@@ -136,9 +140,14 @@ build_pull_request_context() {
 run_upload() {
   local args=("$cli_path" upload "$bundle_path" --api-url "$api_url")
   local token=""
+  local context_path=""
 
   if [ "$github_event_name" = "pull_request" ] && [ "$dry_run" != "true" ]; then
-    args+=(--context-file "$(build_pull_request_context)")
+    if ! context_path="$(build_pull_request_context)"; then
+      handle_failure "context-failed" "StackRadar could not collect pull request context."
+    fi
+
+    args+=(--context-file "$context_path")
   fi
 
   if [ "$dry_run" = "true" ]; then
