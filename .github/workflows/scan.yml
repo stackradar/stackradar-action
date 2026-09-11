@@ -18,4 +18,4 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Upload dependency evidence
-        uses: stackradar/stackradar-action@e69b09e0bcfa362f5c08ca21f69d08159e045728
+        uses: stackradar/stackradar-action@167f737bc092ac54d2b6b1b52a887e29c5389694
