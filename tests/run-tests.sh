@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="${TMPDIR:-/tmp}/stackradar-action-tests"
 
+unset GITHUB_EVENT_NAME
+unset GITHUB_EVENT_PATH
+
 pass_count=0
 
 fail() {
