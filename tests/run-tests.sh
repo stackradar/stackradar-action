@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="${TMPDIR:-/tmp}/stackradar-action-tests"
 
+unset GITHUB_EVENT_NAME
+unset GITHUB_EVENT_PATH
+
 pass_count=0
 
 fail() {
@@ -35,14 +38,22 @@ case "$1" in
     ;;
   bundle)
     output=""
+    allow_empty="0"
     while [ "$#" -gt 0 ]; do
       if [ "$1" = "--output" ]; then
         shift
         output="$1"
       fi
+      if [ "$1" = "--allow-empty" ]; then
+        allow_empty="1"
+      fi
       shift || true
     done
     if [ "${FAKE_BUNDLE_FAIL:-}" = "1" ]; then
+      echo "no supported dependency files found" >&2
+      exit 2
+    fi
+    if [ "${FAKE_BUNDLE_EMPTY:-}" = "1" ] && [ "$allow_empty" != "1" ]; then
       echo "no supported dependency files found" >&2
       exit 2
     fi
@@ -228,6 +239,64 @@ test_run_upload_mode_uses_input_token_without_cli_argument() {
   ok "upload mode uses input token without CLI argument"
 }
 
+test_pull_request_run_attaches_exact_head_context() {
+  reset_tmp
+  write_fake_cli
+
+  cat >"$TMP_ROOT/bin/git" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'M\0package-lock.json\0R100\0package-old.json\0package.json\0'
+SH
+  chmod +x "$TMP_ROOT/bin/git"
+
+  cat >"$TMP_ROOT/bin/unzip" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '{"files":[{"path":"package-lock.json"},{"path":"package.json"}]}'
+SH
+  chmod +x "$TMP_ROOT/bin/unzip"
+
+  cat >"$TMP_ROOT/event.json" <<'JSON'
+{
+  "repository": {"default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "html_url": "https://github.com/acme/radar/pull/42",
+    "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc", "ref": "deps", "repo": {"id": 20002}},
+    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "main"}
+  }
+}
+JSON
+
+  PATH="$TMP_ROOT/bin:$PATH" \
+    FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
+    FAKE_BUNDLE_EMPTY="1" \
+    STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
+    STACKRADAR_OIDC_TOKEN="oidc-token" \
+    GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    INPUT_MODE="bundle-and-upload" \
+    INPUT_PATH="$TMP_ROOT/work" \
+    INPUT_API_URL="https://stackradar.com" \
+    INPUT_BUNDLE_PATH="$TMP_ROOT/work/stackradar.zip" \
+    INPUT_DRY_RUN="false" \
+    INPUT_FAIL_ON_ERROR="true" \
+    INPUT_TOKEN="" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
+
+  grep -Fq -- "bundle --path $TMP_ROOT/work --output $TMP_ROOT/work/stackradar.zip" "$TMP_ROOT/cli.log" || fail "PR bundle was not attempted with released CLI arguments"
+  grep -Fq -- "bundle --path $TMP_ROOT/work --output $TMP_ROOT/work/stackradar.zip --allow-empty" "$TMP_ROOT/cli.log" || fail "PR bundle did not retry for deletion-only evidence"
+  context_path="$(awk '{for (i = 1; i <= NF; i++) if ($i == "--context-file") { print $(i + 1); exit }}' "$TMP_ROOT/cli.log")"
+  test -f "$context_path" || fail "PR upload context file was not created"
+  test "$(jq -r '.purpose' "$context_path")" = "pull_request" || fail "PR upload purpose was not set"
+  test "$(jq -r '.pull_request.head_sha' "$context_path")" = "cccccccccccccccccccccccccccccccccccccccc" || fail "PR head SHA was not bound"
+  test "$(jq -r '.pull_request.changes[1].previous_path' "$context_path")" = "package-old.json" || fail "renamed source path was not collected"
+  test "$(jq -r '.pull_request.collection.expected_paths | length' "$context_path")" = "2" || fail "evidence coverage was not recorded"
+  ok "pull request run attaches exact head and collection context"
+}
+
 test_run_dry_run_calls_cli_upload_dry_run_without_token() {
   reset_tmp
   write_fake_cli
@@ -298,6 +367,61 @@ test_fail_on_error_false_suppresses_bundle_failure() {
     fail "bundle failure should not continue to upload"
   fi
   ok "fail-on-error false suppresses bundle failure"
+}
+
+test_fail_on_error_false_suppresses_pull_request_context_failure() {
+  reset_tmp
+  write_fake_cli
+  printf "bundle-bytes" >"$TMP_ROOT/work/stackradar.zip"
+
+  cat >"$TMP_ROOT/bin/git" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+SH
+  chmod +x "$TMP_ROOT/bin/git"
+
+  cat >"$TMP_ROOT/bin/unzip" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 9
+SH
+  chmod +x "$TMP_ROOT/bin/unzip"
+
+  cat >"$TMP_ROOT/event.json" <<'JSON'
+{
+  "repository": {"default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "html_url": "https://github.com/acme/radar/pull/42",
+    "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc", "ref": "deps", "repo": {"id": 20002}},
+    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "ref": "main"}
+  }
+}
+JSON
+
+  PATH="$TMP_ROOT/bin:$PATH" \
+    FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
+    STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
+    STACKRADAR_OIDC_TOKEN="oidc-token" \
+    GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    INPUT_MODE="upload" \
+    INPUT_PATH="$TMP_ROOT/work" \
+    INPUT_API_URL="https://stackradar.com" \
+    INPUT_BUNDLE_PATH="$TMP_ROOT/work/stackradar.zip" \
+    INPUT_DRY_RUN="false" \
+    INPUT_FAIL_ON_ERROR="false" \
+    INPUT_TOKEN="" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"
+
+  grep -Fq "::warning::StackRadar could not collect pull request context." "$TMP_ROOT/stderr" || fail "context failure was not downgraded to a warning"
+  assert_output_contains "status=context-failed"
+  if [ -f "$TMP_ROOT/cli.log" ] && grep -Fq "upload" "$TMP_ROOT/cli.log"; then
+    fail "context failure should not continue to upload"
+  fi
+  ok "fail-on-error false suppresses pull request context failure"
 }
 
 test_install_maps_platform_and_outputs_cli_version() {
@@ -393,15 +517,25 @@ test_install_rejects_ambient_trust_overrides() {
   ok "install rejects ambient trust overrides"
 }
 
+test_reusable_workflow_intentionally_skips_fork_pull_requests() {
+  grep -Fq "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository" \
+    "$ROOT/.github/workflows/scan.yml" || fail "reusable workflow does not skip fork pull requests"
+
+  ok "reusable workflow intentionally skips fork pull requests"
+}
+
 test_validate_rejects_bad_mode
 test_request_oidc_masks_token
 test_run_bundle_mode_does_not_upload
 test_run_upload_mode_uses_oidc_token_and_masks_it
 test_run_upload_mode_uses_input_token_without_cli_argument
+test_pull_request_run_attaches_exact_head_context
 test_run_dry_run_calls_cli_upload_dry_run_without_token
 test_fail_on_error_false_suppresses_upload_failure
 test_fail_on_error_false_suppresses_bundle_failure
+test_fail_on_error_false_suppresses_pull_request_context_failure
 test_install_maps_platform_and_outputs_cli_version
 test_install_rejects_ambient_trust_overrides
+test_reusable_workflow_intentionally_skips_fork_pull_requests
 
 echo "$pass_count tests passed"

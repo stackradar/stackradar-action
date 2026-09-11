@@ -14,6 +14,8 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
@@ -21,13 +23,10 @@ permissions:
 
 jobs:
   stackradar:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: stackradar/stackradar-action@v1
+    uses: stackradar/stackradar-action/.github/workflows/scan.yml@v1
 ```
 
-By default, the action uses the latest published StackRadar CLI release and strict binary verification.
+The reusable workflow maintains the default-branch inventory and uploads pull-request evidence from the exact PR head commit. By default, it uses the latest published StackRadar CLI release and strict binary verification.
 
 ## Release Integrity
 
