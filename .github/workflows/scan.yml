@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   scan:
+    # Fork PRs are intentionally skipped: limited-access evidence must come from
+    # the same repository where the trusted reusable workflow is running.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the analyzed commit

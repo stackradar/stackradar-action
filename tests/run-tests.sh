@@ -517,6 +517,13 @@ test_install_rejects_ambient_trust_overrides() {
   ok "install rejects ambient trust overrides"
 }
 
+test_reusable_workflow_intentionally_skips_fork_pull_requests() {
+  grep -Fq "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository" \
+    "$ROOT/.github/workflows/scan.yml" || fail "reusable workflow does not skip fork pull requests"
+
+  ok "reusable workflow intentionally skips fork pull requests"
+}
+
 test_validate_rejects_bad_mode
 test_request_oidc_masks_token
 test_run_bundle_mode_does_not_upload
@@ -529,5 +536,6 @@ test_fail_on_error_false_suppresses_bundle_failure
 test_fail_on_error_false_suppresses_pull_request_context_failure
 test_install_maps_platform_and_outputs_cli_version
 test_install_rejects_ambient_trust_overrides
+test_reusable_workflow_intentionally_skips_fork_pull_requests
 
 echo "$pass_count tests passed"
