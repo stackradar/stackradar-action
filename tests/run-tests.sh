@@ -122,9 +122,10 @@ create_fixture_repository() {
   git -C "$source" add --all
   git -C "$source" commit --quiet -m "head"
   FIXTURE_HEAD_SHA="$(git -C "$source" rev-parse HEAD)"
+  FIXTURE_MERGE_SHA="$(printf '%s\n' 'merge' | git -C "$source" commit-tree "${FIXTURE_HEAD_SHA}^{tree}" -p "$FIXTURE_BASE_SHA" -p "$FIXTURE_HEAD_SHA")"
 
   git clone --bare --quiet "$source" "$origin"
-  git --git-dir="$origin" update-ref refs/pull/42/merge "$FIXTURE_HEAD_SHA"
+  git --git-dir="$origin" update-ref refs/pull/42/merge "$FIXTURE_MERGE_SHA"
   FIXTURE_ORIGIN="$origin"
 }
 
@@ -146,9 +147,10 @@ create_deletion_only_fixture_repository() {
   git -C "$source" add --all
   git -C "$source" commit --quiet -m "delete lockfile"
   FIXTURE_HEAD_SHA="$(git -C "$source" rev-parse HEAD)"
+  FIXTURE_MERGE_SHA="$(printf '%s\n' 'merge' | git -C "$source" commit-tree "${FIXTURE_HEAD_SHA}^{tree}" -p "$FIXTURE_BASE_SHA" -p "$FIXTURE_HEAD_SHA")"
 
   git clone --bare --quiet "$source" "$origin"
-  git --git-dir="$origin" update-ref refs/pull/42/merge "$FIXTURE_HEAD_SHA"
+  git --git-dir="$origin" update-ref refs/pull/42/merge "$FIXTURE_MERGE_SHA"
   FIXTURE_ORIGIN="$origin"
 }
 
@@ -215,7 +217,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
-    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
+    GITHUB_SHA="$FIXTURE_MERGE_SHA" \
     GITHUB_WORKSPACE="$workspace" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="." \
@@ -233,7 +235,7 @@ JSON
   test -f "$prepared_path/package.json" || fail "prepared PR source did not contain the exact head tree"
   test -f "$prepared_path/packages/web/pnpm-lock.yaml" || fail "prepared PR source omitted a head dependency file"
   test ! -e "$prepared_path/package-lock.json" || fail "prepared PR source retained a file deleted at the head"
-  test "$(git -C "$prepared_repository_root" rev-parse HEAD)" = "$FIXTURE_HEAD_SHA" || fail "prepared source did not expose the analyzed Git commit"
+  test "$(git -C "$prepared_repository_root" rev-parse HEAD)" = "$FIXTURE_MERGE_SHA" || fail "prepared source did not expose the analyzed Git merge commit"
   test "$(cat "$workspace/sentinel.txt")" = "caller state" || fail "preparing PR source modified the caller workspace"
   test "$(find "$workspace" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "1" || fail "preparing PR source added files to the caller workspace"
 
@@ -348,7 +350,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
-    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
+    GITHUB_SHA="$FIXTURE_MERGE_SHA" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="." \
     run_with_outputs "$ROOT/src/prepare-repository.sh" \
@@ -586,6 +588,17 @@ test_pull_request_run_attaches_exact_head_context() {
   cat >"$TMP_ROOT/bin/git" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+
+if [[ "$*" == *"cat-file commit"* ]]; then
+  printf '%s\n' \
+    'tree aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'parent bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    'parent cccccccccccccccccccccccccccccccccccccccc' \
+    '' \
+    'Merge pull request #42'
+  exit 0
+fi
+
 printf 'M\0package-lock.json\0R100\0package-old.json\0package.json\0'
 SH
   chmod +x "$TMP_ROOT/bin/git"
@@ -609,6 +622,10 @@ SH
 }
 JSON
 
+  local merge_sha expected_object_base64
+  merge_sha="$("$TMP_ROOT/bin/git" --git-dir="$TMP_ROOT/repository.git" cat-file commit ignored | git hash-object -t commit --stdin)"
+  expected_object_base64="$("$TMP_ROOT/bin/git" --git-dir="$TMP_ROOT/repository.git" cat-file commit ignored | base64 | tr -d '\r\n')"
+
   PATH="$TMP_ROOT/bin:$PATH" \
     FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
     FAKE_BUNDLE_EMPTY="1" \
@@ -618,7 +635,7 @@ JSON
     STACKRADAR_OIDC_TOKEN="oidc-token" \
     GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
-    GITHUB_SHA="cccccccccccccccccccccccccccccccccccccccc" \
+    GITHUB_SHA="$merge_sha" \
     INPUT_MODE="bundle-and-upload" \
     INPUT_PATH="$TMP_ROOT/work" \
     INPUT_API_URL="https://stackradar.com" \
@@ -634,7 +651,8 @@ JSON
   context_path="$(awk '{for (i = 1; i <= NF; i++) if ($i == "--context-file") { print $(i + 1); exit }}' "$TMP_ROOT/cli.log")"
   test -f "$context_path" || fail "PR upload context file was not created"
   test "$(jq -r '.purpose' "$context_path")" = "pull_request" || fail "PR upload purpose was not set"
-  test "$(jq -r '.pull_request.head_sha' "$context_path")" = "cccccccccccccccccccccccccccccccccccccccc" || fail "PR head SHA was not bound"
+  test "$(jq -r '.pull_request.head_sha' "$context_path")" = "$merge_sha" || fail "PR merge SHA was not bound"
+  test "$(jq -r '.pull_request.merge_commit.object_base64' "$context_path")" = "$expected_object_base64" || fail "PR merge commit proof did not match GITHUB_SHA"
   test "$(jq -r '.pull_request.changes | length' "$context_path")" = "0" || fail "untrusted changed paths were attached"
   test "$(jq -r '.pull_request.collection.expected_paths | length' "$context_path")" = "2" || fail "evidence coverage was not recorded"
   test "$(jq -r '.pull_request.collection.scope' "$context_path")" = "." || fail "repository scan scope was not recorded"
@@ -661,7 +679,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
-    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
+    GITHUB_SHA="$FIXTURE_MERGE_SHA" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="packages/web" \
     run_with_outputs "$ROOT/src/prepare-repository.sh" \
@@ -689,8 +707,8 @@ JSON
     INPUT_EXCLUDE="" \
     run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
 
-  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.git.commit_sha')" = "$FIXTURE_HEAD_SHA" ||
-    fail "real CLI bundle did not carry the prepared head commit"
+  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.git.commit_sha')" = "$FIXTURE_MERGE_SHA" ||
+    fail "real CLI bundle did not carry the prepared merge commit"
   test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.files[0].path')" = "packages/web/pnpm-lock.yaml" ||
     fail "real CLI bundle did not use a repository-relative scoped path"
   unzip -Z1 "$bundle_path" | grep -Fxq "packages/web/pnpm-lock.yaml" ||
@@ -718,7 +736,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
-    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
+    GITHUB_SHA="$FIXTURE_MERGE_SHA" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="." \
     run_with_outputs "$ROOT/src/prepare-repository.sh" \
@@ -745,8 +763,8 @@ JSON
     INPUT_EXCLUDE="" \
     run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
 
-  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.git.commit_sha')" = "$FIXTURE_HEAD_SHA" ||
-    fail "deletion-only bundle did not carry the PR head commit"
+  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.git.commit_sha')" = "$FIXTURE_MERGE_SHA" ||
+    fail "deletion-only bundle did not carry the PR merge commit"
   test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.files | length')" = "0" ||
     fail "deletion-only bundle should contain no dependency files"
 
