@@ -2,7 +2,7 @@
 
 Upload deterministic dependency-evidence bundles to StackRadar from GitHub Actions.
 
-The action is intentionally thin: it downloads a released `stackradar` CLI binary, verifies it, requests a GitHub Actions OIDC token when uploading, then calls the CLI.
+The action prepares the analyzed Git commit in an isolated runner directory, downloads and verifies a released `stackradar` CLI binary, requests a GitHub Actions OIDC token when uploading, then calls the CLI.
 CLI binaries are downloaded from [`stackradar/stackradar-cli`](https://github.com/stackradar/stackradar-cli) releases.
 
 ## Default Workflow
@@ -14,6 +14,8 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
@@ -23,11 +25,12 @@ jobs:
   stackradar:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
       - uses: stackradar/stackradar-action@v1
 ```
 
-By default, the action uses the latest published StackRadar CLI release and strict binary verification.
+The action maintains the default-branch inventory and uploads pull-request evidence from GitHub's attested PR merge commit. It prepares that exact revision in an isolated runner-temporary directory and does not modify the caller's workspace. StackRadar compares the complete scoped bundle with the last trusted default-branch bundle, so the GitHub App never reads pull-request metadata or repository code. Fork pull requests are skipped because limited-access evidence must come from the installed repository.
+
+By default, the action uses the latest published StackRadar CLI release and strict binary verification. Repository access uses the job's short-lived `GITHUB_TOKEN`; StackRadar's limited-access GitHub App does not receive repository Contents permission.
 
 ## Release Integrity
 
@@ -59,6 +62,12 @@ Tokens are masked in logs and passed between steps only through GitHub's
 step-output mechanism. Upload tokens are passed to the CLI through
 `STACKRADAR_TOKEN`, not as command-line arguments, and they are never written to
 the workspace.
+
+For bundle modes, the action fetches the GitHub event commit into an isolated
+directory under `RUNNER_TEMP`. Pull-request runs fetch both the authoritative
+base and head SHAs from the GitHub event, materialize the exact head tree, and
+calculate changes without modifying `GITHUB_WORKSPACE`. Credentials are applied
+only to the fetch command and are not persisted in Git configuration.
 
 `verify: strict` is the default. It verifies the signed checksum manifest, the
 selected archive checksum, GitHub artifact attestations for the selected release
@@ -96,7 +105,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
       - id: stackradar
         uses: stackradar/stackradar-action@v1
         with:
@@ -128,7 +136,7 @@ jobs:
 | --- | --- | --- |
 | `cli-version` | `latest` | CLI release to download. Use `latest` or a tag such as `v0.1.0`. |
 | `mode` | `bundle-and-upload` | `bundle-and-upload`, `bundle`, or `upload`. |
-| `path` | `.` | Repository path to scan when bundling. |
+| `path` | `.` | Repository-relative path to scan when bundling. |
 | `api-url` | `https://stackradar.com` | StackRadar app/API base URL. |
 | `oidc-audience` | `stackradar.com` | Audience requested for the GitHub Actions OIDC token. |
 | `token` | | Upload token override for non-standard testing. Prefer OIDC in GitHub Actions. |
