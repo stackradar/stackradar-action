@@ -127,6 +127,29 @@ create_fixture_repository() {
   FIXTURE_ORIGIN="$origin"
 }
 
+create_deletion_only_fixture_repository() {
+  local source="$TMP_ROOT/deletion-repository"
+  local origin="$TMP_ROOT/deletion-origin.git"
+
+  git init --quiet "$source"
+  git -C "$source" config user.email "tests@stackradar.com"
+  git -C "$source" config user.name "StackRadar Tests"
+
+  printf '%s\n' '{"lockfileVersion":3,"packages":{}}' >"$source/package-lock.json"
+  printf '%s\n' '# Fixture' >"$source/README.md"
+  git -C "$source" add package-lock.json README.md
+  git -C "$source" commit --quiet -m "base"
+  FIXTURE_BASE_SHA="$(git -C "$source" rev-parse HEAD)"
+
+  rm "$source/package-lock.json"
+  git -C "$source" add --all
+  git -C "$source" commit --quiet -m "delete lockfile"
+  FIXTURE_HEAD_SHA="$(git -C "$source" rev-parse HEAD)"
+
+  git clone --bare --quiet "$source" "$origin"
+  FIXTURE_ORIGIN="$origin"
+}
+
 run_with_outputs() {
   local script="$1"
   shift
@@ -198,14 +221,16 @@ JSON
       --skip-auth-for-test \
       >"$TMP_ROOT/stdout"
 
-  local prepared_path prepared_git_dir checkout_root
+  local prepared_path prepared_repository_root prepared_git_dir checkout_root
   prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+  prepared_repository_root="$(sed -n 's/^repository-root=//p' "$TMP_ROOT/out/github-output")"
   prepared_git_dir="$(sed -n 's/^git-dir=//p' "$TMP_ROOT/out/github-output")"
   checkout_root="$(sed -n 's/^checkout-root=//p' "$TMP_ROOT/out/github-output")"
 
   test -f "$prepared_path/package.json" || fail "prepared PR source did not contain the exact head tree"
   test -f "$prepared_path/packages/web/pnpm-lock.yaml" || fail "prepared PR source omitted a head dependency file"
   test ! -e "$prepared_path/package-lock.json" || fail "prepared PR source retained a file deleted at the head"
+  test "$(git -C "$prepared_repository_root" rev-parse HEAD)" = "$FIXTURE_HEAD_SHA" || fail "prepared source did not expose the analyzed Git commit"
   test "$(cat "$workspace/sentinel.txt")" = "caller state" || fail "preparing PR source modified the caller workspace"
   test "$(find "$workspace" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "1" || fail "preparing PR source added files to the caller workspace"
 
@@ -241,6 +266,7 @@ test_prepare_push_uses_event_commit_without_workspace_checkout() {
   local prepared_path
   prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
   test -f "$prepared_path/pnpm-lock.yaml" || fail "push preparation did not scan the requested path at GITHUB_SHA"
+  assert_output_contains "scope=packages/web"
   test -z "$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)" || fail "push preparation modified the caller workspace"
 
   ok "prepare repository fetches the push commit without a workspace checkout"
@@ -551,6 +577,7 @@ JSON
     FAKE_BUNDLE_EMPTY="1" \
     STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
     STACKRADAR_GIT_DIR="$TMP_ROOT/repository.git" \
+    STACKRADAR_SCAN_SCOPE="." \
     STACKRADAR_OIDC_TOKEN="oidc-token" \
     GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
@@ -572,7 +599,117 @@ JSON
   test "$(jq -r '.pull_request.head_sha' "$context_path")" = "cccccccccccccccccccccccccccccccccccccccc" || fail "PR head SHA was not bound"
   test "$(jq -r '.pull_request.changes[1].previous_path' "$context_path")" = "package-old.json" || fail "renamed source path was not collected"
   test "$(jq -r '.pull_request.collection.expected_paths | length' "$context_path")" = "2" || fail "evidence coverage was not recorded"
+  test "$(jq -r '.pull_request.collection.scope' "$context_path")" = "." || fail "repository scan scope was not recorded"
   ok "pull request run attaches exact head and collection context"
+}
+
+test_real_cli_preserves_scoped_repository_contract() {
+  reset_tmp
+  create_fixture_repository
+  local cli_path="${STACKRADAR_REAL_CLI_PATH:?STACKRADAR_REAL_CLI_PATH is required for the cross-repository contract test}"
+
+  cat >"$TMP_ROOT/event.json" <<JSON
+{
+  "repository": {"id": 20002, "full_name": "acme/radar", "default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "head": {"sha": "$FIXTURE_HEAD_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}},
+    "base": {"sha": "$FIXTURE_BASE_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}}
+  }
+}
+JSON
+
+  GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_REPOSITORY="acme/radar" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="packages/web" \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout"
+
+  local prepared_path repository_root git_dir scope bundle_path
+  prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+  repository_root="$(sed -n 's/^repository-root=//p' "$TMP_ROOT/out/github-output")"
+  git_dir="$(sed -n 's/^git-dir=//p' "$TMP_ROOT/out/github-output")"
+  scope="$(sed -n 's/^scope=//p' "$TMP_ROOT/out/github-output")"
+  bundle_path="$TMP_ROOT/work/scoped.zip"
+
+  STACKRADAR_CLI_PATH="$cli_path" \
+    STACKRADAR_GIT_DIR="$git_dir" \
+    STACKRADAR_REPOSITORY_ROOT="$repository_root" \
+    STACKRADAR_SCAN_SCOPE="$scope" \
+    GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    INPUT_MODE="bundle" \
+    INPUT_PATH="$prepared_path" \
+    INPUT_BUNDLE_PATH="$bundle_path" \
+    INPUT_FAIL_ON_ERROR="true" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
+
+  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.git.commit_sha')" = "$FIXTURE_HEAD_SHA" ||
+    fail "real CLI bundle did not carry the prepared head commit"
+  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.files[0].path')" = "packages/web/pnpm-lock.yaml" ||
+    fail "real CLI bundle did not use a repository-relative scoped path"
+  unzip -Z1 "$bundle_path" | grep -Fxq "packages/web/pnpm-lock.yaml" ||
+    fail "real CLI zip entry did not use the canonical repository path"
+
+  ok "real CLI and action preserve the scoped repository contract"
+}
+
+test_real_cli_bundles_deletion_only_pull_request() {
+  reset_tmp
+  create_deletion_only_fixture_repository
+  local cli_path="${STACKRADAR_REAL_CLI_PATH:?STACKRADAR_REAL_CLI_PATH is required for the cross-repository contract test}"
+
+  cat >"$TMP_ROOT/event.json" <<JSON
+{
+  "repository": {"id": 20002, "full_name": "acme/radar", "default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "head": {"sha": "$FIXTURE_HEAD_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}},
+    "base": {"sha": "$FIXTURE_BASE_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}}
+  }
+}
+JSON
+
+  GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_REPOSITORY="acme/radar" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout"
+
+  local prepared_path repository_root git_dir bundle_path
+  prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+  repository_root="$(sed -n 's/^repository-root=//p' "$TMP_ROOT/out/github-output")"
+  git_dir="$(sed -n 's/^git-dir=//p' "$TMP_ROOT/out/github-output")"
+  bundle_path="$TMP_ROOT/work/deletion-only.zip"
+
+  STACKRADAR_CLI_PATH="$cli_path" \
+    STACKRADAR_GIT_DIR="$git_dir" \
+    STACKRADAR_REPOSITORY_ROOT="$repository_root" \
+    STACKRADAR_SCAN_SCOPE="." \
+    GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    INPUT_MODE="bundle" \
+    INPUT_PATH="$prepared_path" \
+    INPUT_BUNDLE_PATH="$bundle_path" \
+    INPUT_FAIL_ON_ERROR="true" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
+
+  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.git.commit_sha')" = "$FIXTURE_HEAD_SHA" ||
+    fail "deletion-only bundle did not carry the PR head commit"
+  test "$(unzip -p "$bundle_path" stackradar-manifest.json | jq -r '.files | length')" = "0" ||
+    fail "deletion-only bundle should contain no dependency files"
+
+  ok "real CLI and action bundle deletion-only pull requests"
 }
 
 test_run_dry_run_calls_cli_upload_dry_run_without_token() {
@@ -809,6 +946,8 @@ test_run_bundle_mode_does_not_upload
 test_run_upload_mode_uses_oidc_token_and_masks_it
 test_run_upload_mode_uses_input_token_without_cli_argument
 test_pull_request_run_attaches_exact_head_context
+test_real_cli_preserves_scoped_repository_contract
+test_real_cli_bundles_deletion_only_pull_request
 test_run_dry_run_calls_cli_upload_dry_run_without_token
 test_fail_on_error_false_suppresses_upload_failure
 test_fail_on_error_false_suppresses_bundle_failure

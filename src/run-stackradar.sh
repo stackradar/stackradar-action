@@ -18,6 +18,8 @@ exclude_patterns="${INPUT_EXCLUDE:-}"
 github_event_name="${GITHUB_EVENT_NAME:-}"
 github_event_path="${GITHUB_EVENT_PATH:-}"
 git_dir="${STACKRADAR_GIT_DIR:-}"
+repository_root="${STACKRADAR_REPOSITORY_ROOT:-}"
+scan_scope="${STACKRADAR_SCAN_SCOPE:-.}"
 
 unset INPUT_TOKEN
 unset STACKRADAR_OIDC_TOKEN
@@ -47,6 +49,10 @@ handle_failure() {
 run_bundle() {
   local args=("$cli_path" bundle --path "$scan_path" --output "$bundle_path")
   local pattern
+
+  if [ -n "$repository_root" ]; then
+    args+=(--repository-root "$repository_root")
+  fi
 
   while IFS= read -r pattern; do
     if [ -n "$pattern" ]; then
@@ -137,7 +143,8 @@ build_pull_request_context() {
     --argjson complete "$complete" \
     --argjson expected_paths "$expected_paths" \
     --argjson errors "$errors" \
-    '{purpose: "pull_request", pull_request: {number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: $changes, collection: {complete: $complete, expected_paths: $expected_paths, errors: $errors}}}' \
+    --arg scope "$scan_scope" \
+    '{purpose: "pull_request", pull_request: {number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: $changes, collection: {complete: $complete, expected_paths: $expected_paths, errors: $errors, scope: $scope}}}' \
     > "$context_path"; then
     die "Unable to write the StackRadar pull request context."
   fi

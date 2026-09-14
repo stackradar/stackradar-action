@@ -110,7 +110,6 @@ handle_prepare_failure() {
   die "$message"
 }
 
-mkdir -p "$source_root"
 git init --bare --quiet "$git_dir"
 
 if [ -z "$repository_url" ]; then
@@ -154,11 +153,10 @@ fi
 
 unset github_token encoded_credentials git_fetch
 
-# git archive omits paths marked export-ignore in .gitattributes, which would
-# silently drop dependency files from the evidence bundle. read-tree plus
-# checkout-index materializes the commit exactly as recorded.
-if ! git --git-dir="$git_dir" --work-tree="$source_root" read-tree refs/stackradar/head \
-  || ! git --git-dir="$git_dir" --work-tree="$source_root" checkout-index -a -f; then
+# A detached worktree preserves the exact fetched commit while also giving the
+# CLI normal Git metadata. git archive is not used because it drops paths marked
+# export-ignore, including dependency evidence that still belongs in a scan.
+if ! git --git-dir="$git_dir" worktree add --quiet --detach "$source_root" refs/stackradar/head; then
   handle_prepare_failure "Unable to materialize the analyzed Git commit."
 fi
 
@@ -177,7 +175,14 @@ case "$scan_path/" in
   *) die "path must stay within the repository when checkout is enabled." ;;
 esac
 
+scan_scope="."
+if [ "$scan_path" != "$source_root" ]; then
+  scan_scope="${scan_path#"$source_root/"}"
+fi
+
 write_output "path" "$scan_path"
+write_output "repository-root" "$source_root"
+write_output "scope" "$scan_scope"
 write_output "git-dir" "$git_dir"
 write_output "checkout-root" "$checkout_root"
 write_output "skip" "false"

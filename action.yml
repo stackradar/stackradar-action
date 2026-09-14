@@ -8,7 +8,7 @@ branding:
 
 inputs:
   cli-version:
-    description: StackRadar CLI version to download. Use latest or a tag such as v0.1.0.
+    description: StackRadar CLI version to download. Use latest or a tag such as v0.2.0.
     required: false
     default: latest
   mode:
@@ -158,6 +158,8 @@ runs:
         STACKRADAR_CLI_PATH: ${{ steps.install.outputs.cli-path }}
         STACKRADAR_OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
         STACKRADAR_GIT_DIR: ${{ steps.prepare.outputs.git-dir }}
+        STACKRADAR_REPOSITORY_ROOT: ${{ steps.prepare.outputs.repository-root }}
+        STACKRADAR_SCAN_SCOPE: ${{ steps.prepare.outputs.scope }}
         INPUT_MODE: ${{ inputs.mode }}
         INPUT_PATH: ${{ steps.prepare.outputs.path || inputs.path }}
         INPUT_API_URL: ${{ inputs.api-url }}
