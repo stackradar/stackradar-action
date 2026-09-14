@@ -6,6 +6,9 @@ TMP_ROOT="${TMPDIR:-/tmp}/stackradar-action-tests"
 
 unset GITHUB_EVENT_NAME
 unset GITHUB_EVENT_PATH
+unset GITHUB_REPOSITORY
+unset GITHUB_SERVER_URL
+unset GITHUB_SHA
 
 pass_count=0
 
@@ -96,6 +99,34 @@ SH
   chmod +x "$path"
 }
 
+create_fixture_repository() {
+  local source="$TMP_ROOT/repository"
+  local origin="$TMP_ROOT/origin.git"
+
+  git init --quiet "$source"
+  git -C "$source" config user.email "tests@stackradar.com"
+  git -C "$source" config user.name "StackRadar Tests"
+
+  printf '%s\n' '{"name":"fixture"}' >"$source/package-old.json"
+  printf '%s\n' '{"lockfileVersion":3,"packages":{}}' >"$source/package-lock.json"
+  git -C "$source" add package-old.json package-lock.json
+  git -C "$source" commit --quiet -m "base"
+  FIXTURE_BASE_SHA="$(git -C "$source" rev-parse HEAD)"
+
+  mv "$source/package-old.json" "$source/package.json"
+  rm "$source/package-lock.json"
+  mkdir -p "$source/packages/web" "$source/vendored"
+  printf '%s\n' 'lockfileVersion: 9' >"$source/packages/web/pnpm-lock.yaml"
+  printf '%s\n' '# yarn lockfile v1' >"$source/vendored/yarn.lock"
+  printf '%s\n' 'vendored/ export-ignore' >"$source/.gitattributes"
+  git -C "$source" add --all
+  git -C "$source" commit --quiet -m "head"
+  FIXTURE_HEAD_SHA="$(git -C "$source" rev-parse HEAD)"
+
+  git clone --bare --quiet "$source" "$origin"
+  FIXTURE_ORIGIN="$origin"
+}
+
 run_with_outputs() {
   local script="$1"
   shift
@@ -136,6 +167,252 @@ test_validate_rejects_bad_mode() {
   fi
   grep -Fq "mode must be one of" "$TMP_ROOT/stderr" || fail "invalid mode error was unclear"
   ok "validate-inputs rejects invalid mode"
+}
+
+test_prepare_pull_request_uses_isolated_exact_head() {
+  reset_tmp
+  create_fixture_repository
+  local workspace="$TMP_ROOT/caller-workspace"
+  mkdir -p "$workspace"
+  printf '%s\n' "caller state" >"$workspace/sentinel.txt"
+
+  cat >"$TMP_ROOT/event.json" <<JSON
+{
+  "repository": {"id": 20002, "full_name": "acme/radar", "default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "head": {"sha": "$FIXTURE_HEAD_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}},
+    "base": {"sha": "$FIXTURE_BASE_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}}
+  }
+}
+JSON
+
+  GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_WORKSPACE="$workspace" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout"
+
+  local prepared_path prepared_git_dir checkout_root
+  prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+  prepared_git_dir="$(sed -n 's/^git-dir=//p' "$TMP_ROOT/out/github-output")"
+  checkout_root="$(sed -n 's/^checkout-root=//p' "$TMP_ROOT/out/github-output")"
+
+  test -f "$prepared_path/package.json" || fail "prepared PR source did not contain the exact head tree"
+  test -f "$prepared_path/packages/web/pnpm-lock.yaml" || fail "prepared PR source omitted a head dependency file"
+  test ! -e "$prepared_path/package-lock.json" || fail "prepared PR source retained a file deleted at the head"
+  test "$(cat "$workspace/sentinel.txt")" = "caller state" || fail "preparing PR source modified the caller workspace"
+  test "$(find "$workspace" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "1" || fail "preparing PR source added files to the caller workspace"
+
+  git --git-dir="$prepared_git_dir" diff --name-status --find-renames "$FIXTURE_BASE_SHA" "$FIXTURE_HEAD_SHA" >"$TMP_ROOT/diff"
+  grep -Fq $'R100\tpackage-old.json\tpackage.json' "$TMP_ROOT/diff" || fail "prepared repository could not report a rename"
+  grep -Fq $'D\tpackage-lock.json' "$TMP_ROOT/diff" || fail "prepared repository could not report a deletion"
+
+  RUNNER_TEMP="$TMP_ROOT/runner" \
+    STACKRADAR_CHECKOUT_ROOT="$checkout_root" \
+    "$ROOT/src/cleanup-repository.sh"
+  test ! -e "$checkout_root" || fail "prepared repository was not cleaned up"
+
+  ok "prepare repository isolates the exact PR head and base"
+}
+
+test_prepare_push_uses_event_commit_without_workspace_checkout() {
+  reset_tmp
+  create_fixture_repository
+  local workspace="$TMP_ROOT/empty-workspace"
+  mkdir -p "$workspace"
+
+  GITHUB_EVENT_NAME="push" \
+    GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
+    GITHUB_WORKSPACE="$workspace" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="packages/web" \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout"
+
+  local prepared_path
+  prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+  test -f "$prepared_path/pnpm-lock.yaml" || fail "push preparation did not scan the requested path at GITHUB_SHA"
+  test -z "$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)" || fail "push preparation modified the caller workspace"
+
+  ok "prepare repository fetches the push commit without a workspace checkout"
+}
+
+test_prepare_repository_skips_fork_pull_requests() {
+  reset_tmp
+  cat >"$TMP_ROOT/event.json" <<'JSON'
+{
+  "repository": {"id": 20002, "full_name": "acme/radar"},
+  "pull_request": {
+    "head": {"sha": "cccccccccccccccccccccccccccccccccccccccc", "repo": {"id": 30003, "full_name": "contributor/radar"}},
+    "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "repo": {"id": 20002, "full_name": "acme/radar"}}
+  }
+}
+JSON
+
+  GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_REPOSITORY="acme/radar" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"
+
+  assert_output_contains "skip=true"
+  assert_output_contains "status=skipped"
+  test ! -d "$TMP_ROOT/runner" || fail "fork PR preparation should not create a checkout"
+
+  ok "prepare repository skips fork pull requests"
+}
+
+test_prepare_materializes_export_ignored_paths() {
+  reset_tmp
+  create_fixture_repository
+  local workspace="$TMP_ROOT/empty-workspace"
+  mkdir -p "$workspace"
+
+  GITHUB_EVENT_NAME="push" \
+    GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
+    GITHUB_WORKSPACE="$workspace" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout"
+
+  local prepared_path
+  prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+
+  test -f "$prepared_path/vendored/yarn.lock" ||
+    fail "preparation dropped a dependency file marked export-ignore in .gitattributes"
+  test -f "$prepared_path/packages/web/pnpm-lock.yaml" ||
+    fail "preparation omitted a tracked dependency file"
+
+  ok "prepare repository materializes export-ignored dependency files"
+}
+
+test_prepare_tolerates_unreachable_pull_request_base() {
+  reset_tmp
+  create_fixture_repository
+  local missing_base="dddddddddddddddddddddddddddddddddddddddd"
+
+  cat >"$TMP_ROOT/event.json" <<JSON
+{
+  "repository": {"id": 20002, "full_name": "acme/radar", "default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "head": {"sha": "$FIXTURE_HEAD_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}},
+    "base": {"sha": "$missing_base", "repo": {"id": 20002, "full_name": "acme/radar"}}
+  }
+}
+JSON
+
+  GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_REPOSITORY="acme/radar" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr" ||
+    fail "an unreachable pull request base commit should not fail preparation"
+
+  assert_output_contains "skip=false"
+  grep -Fq "could not fetch pull request base commit" "$TMP_ROOT/stderr" ||
+    fail "an unreachable base commit was not reported as a warning"
+
+  local prepared_path prepared_git_dir
+  prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
+  prepared_git_dir="$(sed -n 's/^git-dir=//p' "$TMP_ROOT/out/github-output")"
+
+  test -f "$prepared_path/package.json" ||
+    fail "the head tree was not materialized after a failed base fetch"
+  if git --git-dir="$prepared_git_dir" rev-parse --verify --quiet refs/stackradar/base >/dev/null; then
+    fail "an unreachable base commit should leave no base ref"
+  fi
+
+  ok "prepare repository survives an unreachable pull request base"
+}
+
+test_prepare_fail_on_error_false_suppresses_fetch_failure() {
+  reset_tmp
+  create_fixture_repository
+  local missing_head="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+  if GITHUB_EVENT_NAME="push" \
+    GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$missing_head" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    INPUT_FAIL_ON_ERROR="true" \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"; then
+    fail "an unfetchable analyzed commit should fail when fail-on-error is true"
+  fi
+
+  GITHUB_EVENT_NAME="push" \
+    GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$missing_head" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    INPUT_FAIL_ON_ERROR="false" \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr" ||
+    fail "fail-on-error false should suppress an unfetchable analyzed commit"
+
+  assert_output_contains "skip=true"
+  assert_output_contains "status=prepare-failed"
+  test -z "$(find "$TMP_ROOT/runner" -mindepth 1 -maxdepth 1 -print -quit)" ||
+    fail "a failed preparation left its partial checkout behind"
+
+  ok "prepare repository honors fail-on-error for fetch failures"
+}
+
+test_cleanup_rejects_unexpected_path() {
+  reset_tmp
+  printf '%s\n' "keep" >"$TMP_ROOT/work/sentinel.txt"
+
+  if RUNNER_TEMP="$TMP_ROOT/runner" \
+    STACKRADAR_CHECKOUT_ROOT="$TMP_ROOT/work" \
+    "$ROOT/src/cleanup-repository.sh" >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"; then
+    fail "cleanup should reject a path outside its temporary checkout pattern"
+  fi
+
+  test -f "$TMP_ROOT/work/sentinel.txt" || fail "cleanup removed an unexpected path"
+  grep -Fq "Refusing to clean an unexpected repository checkout path" "$TMP_ROOT/stderr" || fail "unsafe cleanup rejection was unclear"
+
+  ok "cleanup rejects unexpected paths"
+}
+
+test_cleanup_rejects_traversal_out_of_runner_temp() {
+  reset_tmp
+  mkdir -p "$TMP_ROOT/runner/stackradar-source.abc123"
+  printf '%s\n' "keep" >"$TMP_ROOT/work/sentinel.txt"
+
+  if RUNNER_TEMP="$TMP_ROOT/runner" \
+    STACKRADAR_CHECKOUT_ROOT="$TMP_ROOT/runner/stackradar-source.abc123/../../work" \
+    "$ROOT/src/cleanup-repository.sh" >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"; then
+    fail "cleanup should reject a checkout path that traverses out of RUNNER_TEMP"
+  fi
+
+  test -f "$TMP_ROOT/work/sentinel.txt" || fail "cleanup followed .. out of RUNNER_TEMP and removed an unrelated path"
+  grep -Fq "Refusing to clean an unexpected repository checkout path" "$TMP_ROOT/stderr" || fail "unsafe cleanup rejection was unclear"
+
+  ok "cleanup rejects traversal out of RUNNER_TEMP"
 }
 
 test_request_oidc_masks_token() {
@@ -273,6 +550,7 @@ JSON
     FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
     FAKE_BUNDLE_EMPTY="1" \
     STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
+    STACKRADAR_GIT_DIR="$TMP_ROOT/repository.git" \
     STACKRADAR_OIDC_TOKEN="oidc-token" \
     GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
@@ -517,14 +795,15 @@ test_install_rejects_ambient_trust_overrides() {
   ok "install rejects ambient trust overrides"
 }
 
-test_reusable_workflow_intentionally_skips_fork_pull_requests() {
-  grep -Fq "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository" \
-    "$ROOT/.github/workflows/scan.yml" || fail "reusable workflow does not skip fork pull requests"
-
-  ok "reusable workflow intentionally skips fork pull requests"
-}
-
 test_validate_rejects_bad_mode
+test_prepare_pull_request_uses_isolated_exact_head
+test_prepare_push_uses_event_commit_without_workspace_checkout
+test_prepare_repository_skips_fork_pull_requests
+test_prepare_materializes_export_ignored_paths
+test_prepare_tolerates_unreachable_pull_request_base
+test_prepare_fail_on_error_false_suppresses_fetch_failure
+test_cleanup_rejects_unexpected_path
+test_cleanup_rejects_traversal_out_of_runner_temp
 test_request_oidc_masks_token
 test_run_bundle_mode_does_not_upload
 test_run_upload_mode_uses_oidc_token_and_masks_it
@@ -536,6 +815,5 @@ test_fail_on_error_false_suppresses_bundle_failure
 test_fail_on_error_false_suppresses_pull_request_context_failure
 test_install_maps_platform_and_outputs_cli_version
 test_install_rejects_ambient_trust_overrides
-test_reusable_workflow_intentionally_skips_fork_pull_requests
 
 echo "$pass_count tests passed"

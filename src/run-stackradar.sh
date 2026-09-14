@@ -17,6 +17,7 @@ oidc_token="${STACKRADAR_OIDC_TOKEN:-}"
 exclude_patterns="${INPUT_EXCLUDE:-}"
 github_event_name="${GITHUB_EVENT_NAME:-}"
 github_event_path="${GITHUB_EVENT_PATH:-}"
+git_dir="${STACKRADAR_GIT_DIR:-}"
 
 unset INPUT_TOKEN
 unset STACKRADAR_OIDC_TOKEN
@@ -89,7 +90,14 @@ build_pull_request_context() {
   complete=true
   errors='[]'
 
-  if git -C "$scan_path" diff --name-status -z --find-renames "$base_sha" "$head_sha" > "$diff_path"; then
+  local git_args=(git)
+  if [ -n "$git_dir" ]; then
+    git_args+=(--git-dir="$git_dir")
+  else
+    git_args+=(-C "$scan_path")
+  fi
+
+  if "${git_args[@]}" diff --name-status -z --find-renames "$base_sha" "$head_sha" > "$diff_path"; then
     while IFS= read -r -d '' status; do
       local path previous_path normalized_status
       previous_path=''

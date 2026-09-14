@@ -86,16 +86,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Create dependency fixture
-        shell: bash
-        run: |
-          printf '{"name":"stackradar-action-fixture"}\n' > package.json
-          printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
-
       - name: Run local action
         uses: $/
         with:
           cli-version: v0.1.0
+          path: tests/fixtures/integration
           mode: bundle-and-upload
           dry-run: "true"
           verify: strict
