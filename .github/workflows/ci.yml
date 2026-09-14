@@ -72,6 +72,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: stackradar/stackradar-cli
+          ref: 94ac26eccc9b2f9e0138b205e636c43bfef65a31
           path: contract-cli
           persist-credentials: false
 
