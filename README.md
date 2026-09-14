@@ -28,7 +28,7 @@ jobs:
       - uses: stackradar/stackradar-action@v1
 ```
 
-The action maintains the default-branch inventory and uploads pull-request evidence from the exact PR head commit. It prepares the analyzed commit in an isolated runner-temporary directory, fetches the PR base commit for changed-path collection, and does not modify the caller's workspace. Fork pull requests are skipped because limited-access evidence must come from the installed repository.
+The action maintains the default-branch inventory and uploads pull-request evidence from GitHub's attested PR merge commit. It prepares that exact revision in an isolated runner-temporary directory and does not modify the caller's workspace. StackRadar compares the complete scoped bundle with the last trusted default-branch bundle, so the GitHub App never reads pull-request metadata or repository code. Fork pull requests are skipped because limited-access evidence must come from the installed repository.
 
 By default, the action uses the latest published StackRadar CLI release and strict binary verification. Repository access uses the job's short-lived `GITHUB_TOKEN`; StackRadar's limited-access GitHub App does not receive repository Contents permission.
 

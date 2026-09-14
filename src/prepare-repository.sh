@@ -14,6 +14,7 @@ github_server_url="${GITHUB_SERVER_URL:-https://github.com}"
 github_token="${STACKRADAR_GITHUB_TOKEN:-}"
 fail_on_error="${INPUT_FAIL_ON_ERROR:-true}"
 repository_url=""
+fetch_source=""
 skip_auth_for_test=false
 
 unset STACKRADAR_GITHUB_TOKEN
@@ -51,22 +52,19 @@ if [ "$github_event_name" = "pull_request" ]; then
     exit 0
   fi
 
-  base_sha="$(jq -r '.pull_request.base.sha // empty' "$github_event_path")"
-  head_sha="$(jq -r '.pull_request.head.sha // empty' "$github_event_path")"
-  require_value "pull request base SHA" "$base_sha"
-  require_value "pull request head SHA" "$head_sha"
-else
-  base_sha=""
   head_sha="$github_sha"
   require_value "GITHUB_SHA" "$head_sha"
+  pull_request_number="$(jq -r '.pull_request.number // empty' "$github_event_path")"
+  require_value "pull request number" "$pull_request_number"
+  fetch_source="refs/pull/${pull_request_number}/merge"
+else
+  head_sha="$github_sha"
+  require_value "GITHUB_SHA" "$head_sha"
+  fetch_source="$head_sha"
 fi
 
 if [[ ! "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
   die "GitHub head SHA must be a full 40-character commit SHA."
-fi
-
-if [ -n "$base_sha" ] && [[ ! "$base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-  die "GitHub base SHA must be a full 40-character commit SHA."
 fi
 
 require_command git
@@ -140,15 +138,17 @@ fetch_ref() {
     "$refspec"
 }
 
-# The head commit is required to bundle at all. The base commit only feeds the
-# pull request change set, and GitHub may already have collected it after a
-# force-push or rebase of the base branch, so its absence must not fail the run.
-if ! fetch_ref "$head_sha:refs/stackradar/head"; then
+# GitHub's event SHA is the pull request merge revision attested by OIDC. Scan
+# that exact tree so StackRadar never needs the App to read PR metadata or code.
+if ! fetch_ref "$fetch_source:refs/stackradar/head"; then
   handle_prepare_failure "Unable to fetch the analyzed commit $head_sha from $github_repository."
 fi
 
-if [ -n "$base_sha" ] && ! fetch_ref "$base_sha:refs/stackradar/base"; then
-  warn "StackRadar could not fetch pull request base commit $base_sha. The changed-path set will be reported as incomplete."
+fetched_sha="$(git --git-dir="$git_dir" rev-parse refs/stackradar/head)"
+normalized_fetched_sha="$(printf '%s' "$fetched_sha" | tr '[:upper:]' '[:lower:]')"
+normalized_head_sha="$(printf '%s' "$head_sha" | tr '[:upper:]' '[:lower:]')"
+if [ "$normalized_fetched_sha" != "$normalized_head_sha" ]; then
+  handle_prepare_failure "The fetched pull request revision does not match GitHub's attested commit."
 fi
 
 unset github_token encoded_credentials git_fetch

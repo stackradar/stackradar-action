@@ -124,6 +124,7 @@ create_fixture_repository() {
   FIXTURE_HEAD_SHA="$(git -C "$source" rev-parse HEAD)"
 
   git clone --bare --quiet "$source" "$origin"
+  git --git-dir="$origin" update-ref refs/pull/42/merge "$FIXTURE_HEAD_SHA"
   FIXTURE_ORIGIN="$origin"
 }
 
@@ -147,6 +148,7 @@ create_deletion_only_fixture_repository() {
   FIXTURE_HEAD_SHA="$(git -C "$source" rev-parse HEAD)"
 
   git clone --bare --quiet "$source" "$origin"
+  git --git-dir="$origin" update-ref refs/pull/42/merge "$FIXTURE_HEAD_SHA"
   FIXTURE_ORIGIN="$origin"
 }
 
@@ -213,6 +215,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
     GITHUB_WORKSPACE="$workspace" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="." \
@@ -234,16 +237,16 @@ JSON
   test "$(cat "$workspace/sentinel.txt")" = "caller state" || fail "preparing PR source modified the caller workspace"
   test "$(find "$workspace" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = "1" || fail "preparing PR source added files to the caller workspace"
 
-  git --git-dir="$prepared_git_dir" diff --name-status --find-renames "$FIXTURE_BASE_SHA" "$FIXTURE_HEAD_SHA" >"$TMP_ROOT/diff"
-  grep -Fq $'R100\tpackage-old.json\tpackage.json' "$TMP_ROOT/diff" || fail "prepared repository could not report a rename"
-  grep -Fq $'D\tpackage-lock.json' "$TMP_ROOT/diff" || fail "prepared repository could not report a deletion"
+  if git --git-dir="$prepared_git_dir" rev-parse --verify --quiet refs/stackradar/base >/dev/null; then
+    fail "PR preparation fetched base code even though collection comparison is server-side"
+  fi
 
   RUNNER_TEMP="$TMP_ROOT/runner" \
     STACKRADAR_CHECKOUT_ROOT="$checkout_root" \
     "$ROOT/src/cleanup-repository.sh"
   test ! -e "$checkout_root" || fail "prepared repository was not cleaned up"
 
-  ok "prepare repository isolates the exact PR head and base"
+  ok "prepare repository isolates only the attested PR revision"
 }
 
 test_prepare_push_uses_event_commit_without_workspace_checkout() {
@@ -326,7 +329,7 @@ test_prepare_materializes_export_ignored_paths() {
   ok "prepare repository materializes export-ignored dependency files"
 }
 
-test_prepare_tolerates_unreachable_pull_request_base() {
+test_prepare_does_not_fetch_pull_request_base() {
   reset_tmp
   create_fixture_repository
   local missing_base="dddddddddddddddddddddddddddddddddddddddd"
@@ -345,29 +348,27 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="." \
     run_with_outputs "$ROOT/src/prepare-repository.sh" \
       --repository-url "$FIXTURE_ORIGIN" \
       --skip-auth-for-test \
-      >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr" ||
-    fail "an unreachable pull request base commit should not fail preparation"
+      >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"
 
   assert_output_contains "skip=false"
-  grep -Fq "could not fetch pull request base commit" "$TMP_ROOT/stderr" ||
-    fail "an unreachable base commit was not reported as a warning"
 
   local prepared_path prepared_git_dir
   prepared_path="$(sed -n 's/^path=//p' "$TMP_ROOT/out/github-output")"
   prepared_git_dir="$(sed -n 's/^git-dir=//p' "$TMP_ROOT/out/github-output")"
 
   test -f "$prepared_path/package.json" ||
-    fail "the head tree was not materialized after a failed base fetch"
+    fail "the attested pull request revision was not materialized"
   if git --git-dir="$prepared_git_dir" rev-parse --verify --quiet refs/stackradar/base >/dev/null; then
     fail "an unreachable base commit should leave no base ref"
   fi
 
-  ok "prepare repository survives an unreachable pull request base"
+  ok "prepare repository does not fetch pull request base code"
 }
 
 test_prepare_fail_on_error_false_suppresses_fetch_failure() {
@@ -542,6 +543,42 @@ test_run_upload_mode_uses_input_token_without_cli_argument() {
   ok "upload mode uses input token without CLI argument"
 }
 
+test_default_branch_run_attaches_inventory_collection() {
+  reset_tmp
+  write_fake_cli
+
+  cat >"$TMP_ROOT/bin/unzip" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '{"files":[{"path":"packages/web/pnpm-lock.yaml"}]}'
+SH
+  chmod +x "$TMP_ROOT/bin/unzip"
+
+  PATH="$TMP_ROOT/bin:$PATH" \
+    FAKE_CLI_LOG="$TMP_ROOT/cli.log" \
+    STACKRADAR_CLI_PATH="$TMP_ROOT/bin/stackradar" \
+    STACKRADAR_REPOSITORY_ROOT="$TMP_ROOT/work" \
+    STACKRADAR_SCAN_SCOPE="packages/web" \
+    STACKRADAR_OIDC_TOKEN="oidc-token" \
+    GITHUB_EVENT_NAME="push" \
+    INPUT_MODE="bundle-and-upload" \
+    INPUT_PATH="$TMP_ROOT/work" \
+    INPUT_API_URL="https://stackradar.com" \
+    INPUT_BUNDLE_PATH="$TMP_ROOT/work/stackradar.zip" \
+    INPUT_DRY_RUN="false" \
+    INPUT_FAIL_ON_ERROR="true" \
+    INPUT_TOKEN="" \
+    INPUT_EXCLUDE="" \
+    run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout"
+
+  local context_path
+  context_path="$(awk '{for (i = 1; i <= NF; i++) if ($i == "--context-file") { print $(i + 1); exit }}' "$TMP_ROOT/cli.log")"
+  test "$(jq -r '.purpose' "$context_path")" = "inventory" || fail "default-branch upload purpose was not inventory"
+  test "$(jq -r '.collection.scope' "$context_path")" = "packages/web" || fail "default-branch collection scope was not attached"
+  test "$(jq -r '.collection.expected_paths[0]' "$context_path")" = "packages/web/pnpm-lock.yaml" || fail "default-branch evidence paths were not attached"
+  ok "default branch run attaches complete inventory collection"
+}
+
 test_pull_request_run_attaches_exact_head_context() {
   reset_tmp
   write_fake_cli
@@ -581,6 +618,7 @@ JSON
     STACKRADAR_OIDC_TOKEN="oidc-token" \
     GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_SHA="cccccccccccccccccccccccccccccccccccccccc" \
     INPUT_MODE="bundle-and-upload" \
     INPUT_PATH="$TMP_ROOT/work" \
     INPUT_API_URL="https://stackradar.com" \
@@ -597,10 +635,11 @@ JSON
   test -f "$context_path" || fail "PR upload context file was not created"
   test "$(jq -r '.purpose' "$context_path")" = "pull_request" || fail "PR upload purpose was not set"
   test "$(jq -r '.pull_request.head_sha' "$context_path")" = "cccccccccccccccccccccccccccccccccccccccc" || fail "PR head SHA was not bound"
-  test "$(jq -r '.pull_request.changes[1].previous_path' "$context_path")" = "package-old.json" || fail "renamed source path was not collected"
+  test "$(jq -r '.pull_request.changes | length' "$context_path")" = "0" || fail "untrusted changed paths were attached"
   test "$(jq -r '.pull_request.collection.expected_paths | length' "$context_path")" = "2" || fail "evidence coverage was not recorded"
   test "$(jq -r '.pull_request.collection.scope' "$context_path")" = "." || fail "repository scan scope was not recorded"
-  ok "pull request run attaches exact head and collection context"
+  test "$(jq -r '.collection.expected_paths | length' "$context_path")" = "2" || fail "top-level collection contract was not attached"
+  ok "pull request run attaches attested merge and collection context"
 }
 
 test_real_cli_preserves_scoped_repository_contract() {
@@ -622,6 +661,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="packages/web" \
     run_with_outputs "$ROOT/src/prepare-repository.sh" \
@@ -678,6 +718,7 @@ JSON
   GITHUB_EVENT_NAME="pull_request" \
     GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
     GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$FIXTURE_HEAD_SHA" \
     RUNNER_TEMP="$TMP_ROOT/runner" \
     INPUT_PATH="." \
     run_with_outputs "$ROOT/src/prepare-repository.sh" \
@@ -831,7 +872,7 @@ JSON
     INPUT_EXCLUDE="" \
     run_with_outputs "$ROOT/src/run-stackradar.sh" >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr"
 
-  grep -Fq "::warning::StackRadar could not collect pull request context." "$TMP_ROOT/stderr" || fail "context failure was not downgraded to a warning"
+  grep -Fq "::warning::StackRadar could not collect upload context." "$TMP_ROOT/stderr" || fail "context failure was not downgraded to a warning"
   assert_output_contains "status=context-failed"
   if [ -f "$TMP_ROOT/cli.log" ] && grep -Fq "upload" "$TMP_ROOT/cli.log"; then
     fail "context failure should not continue to upload"
@@ -937,7 +978,7 @@ test_prepare_pull_request_uses_isolated_exact_head
 test_prepare_push_uses_event_commit_without_workspace_checkout
 test_prepare_repository_skips_fork_pull_requests
 test_prepare_materializes_export_ignored_paths
-test_prepare_tolerates_unreachable_pull_request_base
+test_prepare_does_not_fetch_pull_request_base
 test_prepare_fail_on_error_false_suppresses_fetch_failure
 test_cleanup_rejects_unexpected_path
 test_cleanup_rejects_traversal_out_of_runner_temp
@@ -945,6 +986,7 @@ test_request_oidc_masks_token
 test_run_bundle_mode_does_not_upload
 test_run_upload_mode_uses_oidc_token_and_masks_it
 test_run_upload_mode_uses_input_token_without_cli_argument
+test_default_branch_run_attaches_inventory_collection
 test_pull_request_run_attaches_exact_head_context
 test_real_cli_preserves_scoped_repository_contract
 test_real_cli_bundles_deletion_only_pull_request

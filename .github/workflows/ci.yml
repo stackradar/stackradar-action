@@ -44,13 +44,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out CLI contract dependency
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: stackradar/stackradar-cli
-          path: contract-cli
-          persist-credentials: false
-
       - name: Shell syntax
         run: bash -n src/*.sh tests/*.sh scripts/*.sh
 
@@ -74,6 +67,13 @@ jobs:
         uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
         with:
           advanced-security: false
+
+      - name: Check out CLI contract dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stackradar/stackradar-cli
+          path: contract-cli
+          persist-credentials: false
 
       - name: Build CLI contract dependency
         working-directory: contract-cli

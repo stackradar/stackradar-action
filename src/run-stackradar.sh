@@ -17,7 +17,7 @@ oidc_token="${STACKRADAR_OIDC_TOKEN:-}"
 exclude_patterns="${INPUT_EXCLUDE:-}"
 github_event_name="${GITHUB_EVENT_NAME:-}"
 github_event_path="${GITHUB_EVENT_PATH:-}"
-git_dir="${STACKRADAR_GIT_DIR:-}"
+github_sha="${GITHUB_SHA:-}"
 repository_root="${STACKRADAR_REPOSITORY_ROOT:-}"
 scan_scope="${STACKRADAR_SCAN_SCOPE:-.}"
 
@@ -78,73 +78,47 @@ run_bundle() {
   handle_failure "bundle-failed" "StackRadar bundle failed. No supported dependency files were found under $scan_path, or discovery failed."
 }
 
-build_pull_request_context() {
-  require_command git
+read_collection() {
   require_command jq
   require_command unzip
-  require_value "GITHUB_EVENT_PATH" "$github_event_path"
+  local expected_paths
 
-  local base_sha head_sha context_path diff_path changes expected_paths complete errors
-  base_sha="$(jq -r '.pull_request.base.sha // empty' "$github_event_path")"
-  head_sha="$(jq -r '.pull_request.head.sha // empty' "$github_event_path")"
-  require_value "pull request base SHA" "$base_sha"
-  require_value "pull request head SHA" "$head_sha"
-
-  context_path="${bundle_path}.pull-request.json"
-  diff_path="${bundle_path}.changes"
-  changes='[]'
-  complete=true
-  errors='[]'
-
-  local git_args=(git)
-  if [ -n "$git_dir" ]; then
-    git_args+=(--git-dir="$git_dir")
-  else
-    git_args+=(-C "$scan_path")
-  fi
-
-  if "${git_args[@]}" diff --name-status -z --find-renames "$base_sha" "$head_sha" > "$diff_path"; then
-    while IFS= read -r -d '' status; do
-      local path previous_path normalized_status
-      previous_path=''
-
-      case "$status" in
-        A*) normalized_status='added' ;;
-        D*) normalized_status='removed' ;;
-        R*)
-          normalized_status='renamed'
-          IFS= read -r -d '' previous_path || true
-          ;;
-        *) normalized_status='modified' ;;
-      esac
-
-      IFS= read -r -d '' path || true
-      changes="$(jq -c --arg path "$path" --arg previous "$previous_path" --arg status "$normalized_status" '. + [{path: $path, previous_path: (if $previous == "" then null else $previous end), status: $status}]' <<< "$changes")"
-    done < "$diff_path"
-  else
-    complete=false
-    errors='["Unable to collect the pull request file change set."]'
-  fi
-
-  if ! expected_paths="$(unzip -p "$bundle_path" stackradar-manifest.json | jq -c '[.files[].path]')"; then
+  if ! expected_paths="$(unzip -p "$bundle_path" stackradar-manifest.json | jq -c '[.files[].path] | sort')"; then
     die "Unable to read dependency paths from the StackRadar bundle manifest."
   fi
+
+  jq -cn \
+    --argjson expected_paths "$expected_paths" \
+    --arg scope "$scan_scope" \
+    '{complete: true, expected_paths: $expected_paths, errors: [], scope: $scope}'
+}
+
+build_upload_context() {
+  local context_path collection
+  collection="$(read_collection)"
+  context_path="${bundle_path}.context.json"
+
+  if [ "$github_event_name" != "pull_request" ]; then
+    jq -n --argjson collection "$collection" \
+      '{purpose: "inventory", collection: $collection}' > "$context_path"
+    printf '%s\n' "$context_path"
+    return
+  fi
+
+  require_value "GITHUB_EVENT_PATH" "$github_event_path"
+  require_value "GITHUB_SHA" "$github_sha"
 
   if ! jq -n \
     --argjson number "$(jq '.pull_request.number' "$github_event_path")" \
     --arg url "$(jq -r '.pull_request.html_url // empty' "$github_event_path")" \
-    --arg head_sha "$head_sha" \
+    --arg head_sha "$github_sha" \
     --arg head_ref "$(jq -r '.pull_request.head.ref // empty' "$github_event_path")" \
     --arg head_repository_id "$(jq -r '.pull_request.head.repo.id // empty' "$github_event_path")" \
-    --arg base_sha "$base_sha" \
+    --arg base_sha "$(jq -r '.pull_request.base.sha // empty' "$github_event_path")" \
     --arg base_ref "$(jq -r '.pull_request.base.ref // empty' "$github_event_path")" \
     --arg default_branch "$(jq -r '.repository.default_branch // .pull_request.base.ref // empty' "$github_event_path")" \
-    --argjson changes "$changes" \
-    --argjson complete "$complete" \
-    --argjson expected_paths "$expected_paths" \
-    --argjson errors "$errors" \
-    --arg scope "$scan_scope" \
-    '{purpose: "pull_request", pull_request: {number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: $changes, collection: {complete: $complete, expected_paths: $expected_paths, errors: $errors, scope: $scope}}}' \
+    --argjson collection "$collection" \
+    '{purpose: "pull_request", collection: $collection, pull_request: {number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: [], collection: $collection}}' \
     > "$context_path"; then
     die "Unable to write the StackRadar pull request context."
   fi
@@ -157,9 +131,9 @@ run_upload() {
   local token=""
   local context_path=""
 
-  if [ "$github_event_name" = "pull_request" ] && [ "$dry_run" != "true" ]; then
-    if ! context_path="$(build_pull_request_context)"; then
-      handle_failure "context-failed" "StackRadar could not collect pull request context."
+  if [ "$dry_run" != "true" ] && { [ "$github_event_name" = "pull_request" ] || [ -n "$repository_root" ]; }; then
+    if ! context_path="$(build_upload_context)"; then
+      handle_failure "context-failed" "StackRadar could not collect upload context."
     fi
 
     args+=(--context-file "$context_path")
