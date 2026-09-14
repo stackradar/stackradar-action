@@ -594,6 +594,8 @@ if [[ "$*" == *"cat-file commit"* ]]; then
     'tree aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     'parent bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
     'parent cccccccccccccccccccccccccccccccccccccccc' \
+    'author StackRadar Tests <tests@stackradar.com> 1700000000 +0000' \
+    'committer StackRadar Tests <tests@stackradar.com> 1700000000 +0000' \
     '' \
     'Merge pull request #42'
   exit 0
