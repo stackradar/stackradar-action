@@ -72,7 +72,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: stackradar/stackradar-cli
-          ref: 94ac26eccc9b2f9e0138b205e636c43bfef65a31
+          ref: 3f315fea1e948dd0b03221f97d65c436344b57ce # v0.2.1
           path: contract-cli
           persist-credentials: false
 
@@ -103,7 +103,7 @@ jobs:
       - name: Run local action
         uses: $/
         with:
-          cli-version: v0.2.0
+          cli-version: v0.2.1
           path: tests/fixtures/integration
           mode: bundle-and-upload
           dry-run: "true"

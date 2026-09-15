@@ -19,6 +19,7 @@ github_event_name="${GITHUB_EVENT_NAME:-}"
 github_event_path="${GITHUB_EVENT_PATH:-}"
 github_sha="${GITHUB_SHA:-}"
 repository_root="${STACKRADAR_REPOSITORY_ROOT:-}"
+git_dir="${STACKRADAR_GIT_DIR:-}"
 scan_scope="${STACKRADAR_SCAN_SCOPE:-.}"
 
 unset INPUT_TOKEN
@@ -93,8 +94,24 @@ read_collection() {
     '{complete: true, expected_paths: $expected_paths, errors: [], scope: $scope}'
 }
 
+read_merge_commit() {
+  require_command git
+  require_command base64
+
+  local object_base64
+  if ! object_base64="$(git --git-dir="$git_dir" cat-file commit "$github_sha" | base64 | tr -d '\r\n')"; then
+    die "Unable to read the GitHub-attested pull request merge commit."
+  fi
+
+  if [ -z "$object_base64" ]; then
+    die "The GitHub-attested pull request merge commit was empty."
+  fi
+
+  jq -cn --arg object_base64 "$object_base64" '{object_base64: $object_base64}'
+}
+
 build_upload_context() {
-  local context_path collection
+  local context_path collection merge_commit
   collection="$(read_collection)"
   context_path="${bundle_path}.context.json"
 
@@ -108,6 +125,11 @@ build_upload_context() {
   require_value "GITHUB_EVENT_PATH" "$github_event_path"
   require_value "GITHUB_SHA" "$github_sha"
 
+  merge_commit="null"
+  if [ -n "$git_dir" ]; then
+    merge_commit="$(read_merge_commit)"
+  fi
+
   if ! jq -n \
     --argjson number "$(jq '.pull_request.number' "$github_event_path")" \
     --arg url "$(jq -r '.pull_request.html_url // empty' "$github_event_path")" \
@@ -117,8 +139,9 @@ build_upload_context() {
     --arg base_sha "$(jq -r '.pull_request.base.sha // empty' "$github_event_path")" \
     --arg base_ref "$(jq -r '.pull_request.base.ref // empty' "$github_event_path")" \
     --arg default_branch "$(jq -r '.repository.default_branch // .pull_request.base.ref // empty' "$github_event_path")" \
+    --argjson merge_commit "$merge_commit" \
     --argjson collection "$collection" \
-    '{purpose: "pull_request", collection: $collection, pull_request: {number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: [], collection: $collection}}' \
+    '{purpose: "pull_request", collection: $collection, pull_request: ({number: $number, url: $url, head_sha: $head_sha, head_ref: $head_ref, head_repository_id: $head_repository_id, base_sha: $base_sha, base_ref: $base_ref, default_branch: $default_branch, changes: [], collection: $collection} + (if $merge_commit == null then {} else {merge_commit: $merge_commit} end))}' \
     > "$context_path"; then
     die "Unable to write the StackRadar pull request context."
   fi
