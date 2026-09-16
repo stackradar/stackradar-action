@@ -68,7 +68,21 @@ jobs:
         with:
           advanced-security: false
 
+      - name: Check out CLI contract dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stackradar/stackradar-cli
+          ref: 3f315fea1e948dd0b03221f97d65c436344b57ce # v0.2.1
+          path: contract-cli
+          persist-credentials: false
+
+      - name: Build CLI contract dependency
+        working-directory: contract-cli
+        run: go build -o "$RUNNER_TEMP/stackradar" ./cmd/stackradar
+
       - name: Action tests
+        env:
+          STACKRADAR_REAL_CLI_PATH: ${{ runner.temp }}/stackradar
         run: bash tests/run-tests.sh
 
   integration:
@@ -86,16 +100,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Create dependency fixture
-        shell: bash
-        run: |
-          printf '{"name":"stackradar-action-fixture"}\n' > package.json
-          printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
-
       - name: Run local action
         uses: $/
         with:
-          cli-version: v0.1.0
+          cli-version: v0.2.1
+          path: tests/fixtures/integration
           mode: bundle-and-upload
           dry-run: "true"
           verify: strict
