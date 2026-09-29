@@ -381,7 +381,7 @@ test_prepare_rerun_fetches_attested_sha_after_merge_ref_moves() {
 
   # GitHub serves any commit by SHA; a local origin must opt in explicitly.
   git --git-dir="$FIXTURE_ORIGIN" config uploadpack.allowAnySHA1InWant true
-  rebuilt_merge_sha="$(printf '%s\n' 'rebuilt merge' | git --git-dir="$FIXTURE_ORIGIN" commit-tree "${FIXTURE_HEAD_SHA}^{tree}" -p "$FIXTURE_BASE_SHA" -p "$FIXTURE_HEAD_SHA")"
+  rebuilt_merge_sha="$(printf '%s\n' 'rebuilt merge' | git --git-dir="$FIXTURE_ORIGIN" -c user.email="tests@stackradar.com" -c user.name="StackRadar Tests" commit-tree "${FIXTURE_HEAD_SHA}^{tree}" -p "$FIXTURE_BASE_SHA" -p "$FIXTURE_HEAD_SHA")"
   git --git-dir="$FIXTURE_ORIGIN" update-ref refs/pull/42/merge "$rebuilt_merge_sha"
 
   cat >"$TMP_ROOT/event.json" <<JSON
