@@ -14,7 +14,6 @@ github_server_url="${GITHUB_SERVER_URL:-https://github.com}"
 github_token="${STACKRADAR_GITHUB_TOKEN:-}"
 fail_on_error="${INPUT_FAIL_ON_ERROR:-true}"
 repository_url=""
-fetch_source=""
 skip_auth_for_test=false
 
 unset STACKRADAR_GITHUB_TOKEN
@@ -52,16 +51,10 @@ if [ "$github_event_name" = "pull_request" ]; then
     exit 0
   fi
 
-  head_sha="$github_sha"
-  require_value "GITHUB_SHA" "$head_sha"
-  pull_request_number="$(jq -r '.pull_request.number // empty' "$github_event_path")"
-  require_value "pull request number" "$pull_request_number"
-  fetch_source="refs/pull/${pull_request_number}/merge"
-else
-  head_sha="$github_sha"
-  require_value "GITHUB_SHA" "$head_sha"
-  fetch_source="$head_sha"
 fi
+
+head_sha="$github_sha"
+require_value "GITHUB_SHA" "$head_sha"
 
 if [[ ! "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
   die "GitHub head SHA must be a full 40-character commit SHA."
@@ -138,9 +131,10 @@ fetch_ref() {
     "$refspec"
 }
 
-# GitHub's event SHA is the pull request merge revision attested by OIDC. Scan
-# that exact tree so StackRadar never needs the App to read PR metadata or code.
-if ! fetch_ref "$fetch_source:refs/stackradar/head"; then
+# GitHub's event SHA is the revision attested by OIDC (the merge revision for
+# pull requests). Fetch it by SHA, not refs/pull/N/merge: GitHub rebuilds that
+# ref when the PR or its base changes, while re-runs keep the original SHA.
+if ! fetch_ref "$head_sha:refs/stackradar/head"; then
   handle_prepare_failure "Unable to fetch the analyzed commit $head_sha from $github_repository."
 fi
 

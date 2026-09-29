@@ -373,6 +373,48 @@ JSON
   ok "prepare repository does not fetch pull request base code"
 }
 
+test_prepare_rerun_fetches_attested_sha_after_merge_ref_moves() {
+  reset_tmp
+  create_fixture_repository
+  local attested_merge_sha="$FIXTURE_MERGE_SHA"
+  local rebuilt_merge_sha
+
+  # GitHub serves any commit by SHA; a local origin must opt in explicitly.
+  git --git-dir="$FIXTURE_ORIGIN" config uploadpack.allowAnySHA1InWant true
+  rebuilt_merge_sha="$(printf '%s\n' 'rebuilt merge' | git --git-dir="$FIXTURE_ORIGIN" commit-tree "${FIXTURE_HEAD_SHA}^{tree}" -p "$FIXTURE_BASE_SHA" -p "$FIXTURE_HEAD_SHA")"
+  git --git-dir="$FIXTURE_ORIGIN" update-ref refs/pull/42/merge "$rebuilt_merge_sha"
+
+  cat >"$TMP_ROOT/event.json" <<JSON
+{
+  "repository": {"id": 20002, "full_name": "acme/radar", "default_branch": "main"},
+  "pull_request": {
+    "number": 42,
+    "head": {"sha": "$FIXTURE_HEAD_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}},
+    "base": {"sha": "$FIXTURE_BASE_SHA", "repo": {"id": 20002, "full_name": "acme/radar"}}
+  }
+}
+JSON
+
+  GITHUB_EVENT_NAME="pull_request" \
+    GITHUB_EVENT_PATH="$TMP_ROOT/event.json" \
+    GITHUB_REPOSITORY="acme/radar" \
+    GITHUB_SHA="$attested_merge_sha" \
+    RUNNER_TEMP="$TMP_ROOT/runner" \
+    INPUT_PATH="." \
+    run_with_outputs "$ROOT/src/prepare-repository.sh" \
+      --repository-url "$FIXTURE_ORIGIN" \
+      --skip-auth-for-test \
+      >"$TMP_ROOT/stdout" 2>"$TMP_ROOT/stderr" ||
+    fail "re-run with a moved merge ref should still prepare the attested revision"
+
+  local prepared_repository_root
+  prepared_repository_root="$(sed -n 's/^repository-root=//p' "$TMP_ROOT/out/github-output")"
+  test "$(git -C "$prepared_repository_root" rev-parse HEAD)" = "$attested_merge_sha" ||
+    fail "re-run did not prepare the attested merge commit"
+
+  ok "prepare repository re-run fetches the attested SHA after the merge ref moves"
+}
+
 test_prepare_fail_on_error_false_suppresses_fetch_failure() {
   reset_tmp
   create_fixture_repository
@@ -999,6 +1041,7 @@ test_prepare_push_uses_event_commit_without_workspace_checkout
 test_prepare_repository_skips_fork_pull_requests
 test_prepare_materializes_export_ignored_paths
 test_prepare_does_not_fetch_pull_request_base
+test_prepare_rerun_fetches_attested_sha_after_merge_ref_moves
 test_prepare_fail_on_error_false_suppresses_fetch_failure
 test_cleanup_rejects_unexpected_path
 test_cleanup_rejects_traversal_out_of_runner_temp
