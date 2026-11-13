@@ -8,7 +8,7 @@ branding:
 
 inputs:
   cli-version:
-    description: StackRadar CLI version to download. Use latest or a tag such as v0.2.0.
+    description: StackRadar CLI version to download. Use latest or a tag such as v0.2.2.
     required: false
     default: latest
   mode:
@@ -108,7 +108,7 @@ runs:
 
     - name: Install cosign
       if: ${{ steps.prepare.outputs.skip != 'true' && inputs.verify != 'false' }}
-      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       with:
         cosign-release: v3.1.4
 
