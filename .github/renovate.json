@@ -7,7 +7,7 @@
   "dependencyDashboard": false,
   "timezone": "Europe/Riga",
   "labels": [
-    "dependencies"
+    "semver:chore"
   ],
   "packageRules": [
     {
