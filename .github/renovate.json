@@ -9,6 +9,7 @@
   "labels": [
     "semver:chore"
   ],
+  "minimumReleaseAge": "7 days",
   "packageRules": [
     {
       "description": "Group GitHub Actions updates, including digest refreshes.",
@@ -41,6 +42,13 @@
         ],
         "executionMode": "branch"
       }
+    },
+    {
+      "description": "Our own CLI releases need no waiting period.",
+      "matchPackageNames": [
+        "stackradar/stackradar-cli"
+      ],
+      "minimumReleaseAge": "0 days"
     }
   ],
   "customManagers": [
